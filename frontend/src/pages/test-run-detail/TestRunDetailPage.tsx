@@ -1636,10 +1636,10 @@ export function TestRunDetail() {
                         size="icon"
                         variant="ghost"
                         onClick={startRenameName}
-                        className="h-8 w-8 shrink-0 text-slate-500 hover:bg-slate-900/10 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+                        className="h-9 w-9 shrink-0 text-slate-500 hover:bg-slate-900/10 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
                         aria-label={t('renameTestRun')}
                       >
-                        <Edit className={`h-4 w-4 ${isRTL ? 'ml-1.5' : 'mr-1.5'}`} />
+                        <Edit className="h-[18px] w-[18px]" />
                       </Button>
                     )}
                   </div>
