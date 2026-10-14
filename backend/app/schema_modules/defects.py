@@ -389,6 +389,28 @@ class User(BaseModel):
         from_attributes = True
 
 
+class DefectLinkedEntity(BaseModel):
+    """A linked test case or requirement, summarised inside a defect response.
+
+    The list/detail routes hand FastAPI the ORM rows directly, so these read from
+    attributes. They must NOT be typed as ``Dict``: ``Defect.test_case`` /
+    ``Defect.requirement`` are relationships returning ``TestCase`` / ``Requirement``
+    instances, and validating one against ``Dict`` raises a ResponseValidationError
+    (HTTP 500) for every defect that actually has a link.
+    """
+
+    id: int
+    project_seq: Optional[int] = None
+    title: Optional[str] = None
+    # Requirement's human code ("REQ-001"); test cases have no equivalent column.
+    key: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("key", "requirement_id")
+    )
+
+    class Config:
+        from_attributes = True
+
+
 class DefectManagement(DefectManagementBase):
     id: int
     project_id: int
@@ -397,8 +419,8 @@ class DefectManagement(DefectManagementBase):
     updated_at: Optional[datetime] = None
     reporter: Optional[User] = None
     assignee: Optional[User] = None
-    test_case: Optional[Dict[str, Any]] = None
-    requirement: Optional[Dict[str, Any]] = None
+    test_case: Optional[DefectLinkedEntity] = None
+    requirement: Optional[DefectLinkedEntity] = None
 
     class Config:
         from_attributes = True
