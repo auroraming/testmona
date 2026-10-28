@@ -27,6 +27,8 @@ export function localeForLanguage(lang?: Language | string | null): string | und
       return 'ar';
     case 'en':
       return 'en-US';
+    case 'zh-CN':
+      return 'zh-CN';
     default:
       return undefined;
   }

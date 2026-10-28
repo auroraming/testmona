@@ -281,6 +281,7 @@ def register_saved_filters_and_bulk_routes(app) -> None:
         # ``project_id`` — its project is derived through the parent test
         # suite. Load the suite too so we can scope the move properly.
         target_section_project_id: Optional[int] = None
+        target_section_suite_id: Optional[int] = None
         if payload.section_id is not None:
             section_row = (
                 db.query(models.TestCaseSection, models.TestSuite)
@@ -291,6 +292,7 @@ def register_saved_filters_and_bulk_routes(app) -> None:
             if section_row is None:
                 raise HTTPException(status_code=404, detail="Target section not found")
             target_section_project_id = section_row[1].project_id
+            target_section_suite_id = section_row[0].test_suite_id
 
         # Test-case tags are normalized Tag rows; payloads carry name lists.
         add_tags = payload.add_tags or []
@@ -320,6 +322,11 @@ def register_saved_filters_and_bulk_routes(app) -> None:
                 continue
             if target_section_project_id is not None and target_section_project_id != project_id:
                 # Don't silently relocate a test case to a section in another project.
+                skipped.append(case_id)
+                continue
+            if target_section_suite_id is not None and target_section_suite_id != case.test_suite_id:
+                # A section is owned by a suite.  Moving only ``section_id`` to
+                # another suite would leave a structurally inconsistent case.
                 skipped.append(case_id)
                 continue
 

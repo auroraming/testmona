@@ -28,6 +28,7 @@ import {
   BookOpen,
   ScanSearch,
   HeartPulse,
+  BrainCircuit,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/authStore';
@@ -142,6 +143,7 @@ export function Sidebar({
           { name: t('requirements'), href: `/projects/${projectId}/requirements`, icon: FileCheck, feature: 'requirements' },
           { name: t('docHub'), href: `/projects/${projectId}/docs`, icon: BookOpen, feature: 'doc_hub' },
           { name: t('testCases'), href: `/projects/${projectId}/test-cases`, icon: FileText, feature: 'test_cases' },
+          { name: t('mindmaps'), href: `/projects/${projectId}/mindmaps`, icon: BrainCircuit, feature: 'test_cases' },
           { name: t('testSuites'), href: `/projects/${projectId}/test-suites`, icon: TestTube, feature: 'test_suites' },
           { name: t('testRuns'), href: `/projects/${projectId}/test-runs`, icon: PlayCircle, feature: 'test_runs' },
         ]

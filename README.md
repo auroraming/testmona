@@ -70,6 +70,7 @@ That's it. Here's where everything lives once it's running:
 ## Documentation
 
 - [Installation Guide](docs/INSTALLATION.md) — prerequisites, manual and Docker setup, databases, and troubleshooting.
+- [MCP Server](docs/MCP.md) — connect MCP clients to test-case directories, mind maps, and OpenAPI conversion.
 
 [![Project Wiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pricyproject/testmona)
 

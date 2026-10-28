@@ -410,7 +410,7 @@ class TestMindmapBase(BaseModel):
 
 
 class TestMindmapCreate(TestMindmapBase):
-    created_by: int
+    pass
 
 
 class TestMindmapUpdate(BaseModel):
@@ -428,6 +428,28 @@ class TestMindmap(TestMindmapBase):
 
     class Config:
         from_attributes = True
+
+
+class TestMindmapLinkCreate(BaseModel):
+    test_case_ids: List[int] = Field(min_length=1, max_length=500)
+
+
+class TestMindmapLinkedTestCase(BaseModel):
+    id: int
+    project_seq: Optional[int] = None
+    title: str
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    test_suite_id: int
+    section_id: Optional[int] = None
+    node_id: str
+
+
+class TestCaseMindmapLink(BaseModel):
+    mindmap_id: int
+    mindmap_name: str
+    node_id: str
+    node_title: Optional[str] = None
 
 
 # Impact Analysis Schemas

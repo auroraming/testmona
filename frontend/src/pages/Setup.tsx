@@ -187,7 +187,7 @@ export function Setup() {
               <Select
                 value={language}
                 onValueChange={(value) => {
-                  setLanguage(value as 'en' | 'fa' | 'ar');
+                  setLanguage(value as 'en' | 'fa' | 'ar' | 'zh-CN');
                 }}
               >
                 <SelectTrigger className="w-[140px]">
@@ -198,6 +198,7 @@ export function Setup() {
                   <SelectItem value="en">🇺🇸 English</SelectItem>
                   <SelectItem value="fa">🇮🇷 فارسی</SelectItem>
                   <SelectItem value="ar">🇸🇦 العربية</SelectItem>
+                  <SelectItem value="zh-CN">🇨🇳 简体中文</SelectItem>
                 </SelectContent>
               </Select>
             </div>

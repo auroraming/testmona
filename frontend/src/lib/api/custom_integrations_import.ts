@@ -252,6 +252,22 @@ const createIdempotencyKey = () => (
 
 // Import/Export API
 export const importExportAPI = {
+  previewOpenAPI: async (projectId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('project_id', String(projectId));
+    formData.append('file', file);
+    const response = await api.post('/import-export/openapi/preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    });
+    return response.data as OpenAPIPreview;
+  },
+  commitOpenAPI: async (payload: OpenAPICommitPayload) => {
+    const response = await api.post('/import-export/openapi/commit', payload, {
+      timeout: 300000,
+    });
+    return response.data as OpenAPICommitResult;
+  },
   exportTestCases: async (testSuiteId?: number, format = 'csv') => {
     const params = testSuiteId ? `?test_suite_id=${testSuiteId}&format=${format}` : `?format=${format}`;
     const response = await api.get(`/import-export/export/test-cases/${params}`, {
@@ -396,4 +412,39 @@ export const importExportAPI = {
     options.onProgress?.({ phase: 'complete', currentChunk: chunks.length, totalChunks: chunks.length, processedRows: rows.length, totalRows: rows.length });
     return aggregate;
   },
+};
+
+export type OpenAPIDraft = {
+  operation_key: string;
+  title: string;
+  reference: string;
+  description?: string | null;
+  preconditions?: string | null;
+  priority: string;
+  test_type: string;
+  steps: Array<Record<string, unknown>>;
+};
+
+export type OpenAPIPreview = {
+  title: string;
+  version: string;
+  fingerprint: string;
+  operations: Array<{ key: string; method: string; path: string; summary?: string | null }>;
+  drafts: OpenAPIDraft[];
+  warnings: string[];
+};
+
+export type OpenAPICommitPayload = {
+  project_id: number;
+  test_suite_id: number;
+  section_id?: number;
+  duplicate_mode: 'skip' | 'copy';
+  drafts: OpenAPIDraft[];
+};
+
+export type OpenAPICommitResult = {
+  created_ids: number[];
+  skipped_operation_keys: string[];
+  created: number;
+  skipped: number;
 };

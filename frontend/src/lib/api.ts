@@ -9,3 +9,4 @@ export * from "./api/planning_defects_analytics";
 export * from "./api/custom_integrations_import";
 export * from "./api/management_search";
 export * from "./api/inbox";
+export * from "./api/mindmaps";

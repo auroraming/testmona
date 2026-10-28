@@ -71,6 +71,16 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+# SQLite runtime sidecars (created while the local backend is running)
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
 
 # Temporary files
 tmp/

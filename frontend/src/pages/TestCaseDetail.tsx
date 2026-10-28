@@ -11,6 +11,7 @@ import {
   Eye,
   FileText,
   History,
+  BrainCircuit,
   PanelRightClose,
   PanelRightOpen,
   Play,
@@ -27,7 +28,7 @@ import { WatchButton } from '@/components/WatchButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useDateFormat } from '@/hooks/useDateFormat';
 import { useToast } from '@/hooks/use-toast';
-import { api, customFieldsAPI, datasetsAPI, sectionsAPI, testCasesAPI, testSuitesAPI, parseCustomFieldOptions, type TestDataset, type GlobalParameter } from '@/lib/api';
+import { api, customFieldsAPI, datasetsAPI, mindmapsAPI, sectionsAPI, testCasesAPI, testSuitesAPI, parseCustomFieldOptions, type TestDataset, type GlobalParameter, type TestCaseMindmapLink } from '@/lib/api';
 import { useResolvedEntityId } from '@/hooks/useResolvedEntityId';
 import { useProjectPermissions } from '@/hooks/useProjectPermissions';
 import { entityKey, entitySeq } from '@/lib/utils';
@@ -79,6 +80,7 @@ export function TestCaseDetail() {
   const [testRunHistory, setTestRunHistory] = useState<any[]>([]);
   const [showLinkedRequirements, setShowLinkedRequirements] = useState(true);
   const [linkedRequirements, setLinkedRequirements] = useState<Requirement[]>([]);
+  const [linkedMindmaps, setLinkedMindmaps] = useState<TestCaseMindmapLink[]>([]);
   const [linkedRequirementsLoading, setLinkedRequirementsLoading] = useState(false);
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
   const [customFieldsLoading, setCustomFieldsLoading] = useState(false);
@@ -134,6 +136,7 @@ export function TestCaseDetail() {
     setRevisions([]);
     setTestRunHistory([]);
     setLinkedRequirements([]);
+    setLinkedMindmaps([]);
     setCustomFields([]);
   };
 
@@ -184,6 +187,12 @@ export function TestCaseDetail() {
         setTestCase(testCaseData);
         setTestSuite(testSuiteData);
         setLinkedRequirements(Array.isArray(testCaseData.linked_requirements) ? testCaseData.linked_requirements : []);
+        mindmapsAPI.listForTestCase(testCaseId)
+          .then((rows) => { if (isMounted) setLinkedMindmaps(Array.isArray(rows) ? rows : []); })
+          .catch((mindmapError) => {
+            console.error('Failed to fetch linked mind maps:', mindmapError);
+            if (isMounted) setLinkedMindmaps([]);
+          });
 
         const projectForCustomFields = Number(projectId || testSuiteData?.project_id || testCaseData.test_suite?.project_id || (testCaseData as any).project_id);
         if (projectForCustomFields && !Number.isNaN(projectForCustomFields)) {
@@ -946,6 +955,35 @@ export function TestCaseDetail() {
                   )}
                 </CardContent>
               )}
+            </Card>
+
+            <Card className="border-slate-200 shadow-xs dark:border-slate-800">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <BrainCircuit className="h-4 w-4 text-blue-600" />
+                  {t('linkedMindmaps')}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {linkedMindmaps.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700">
+                    {t('noLinkedMindmaps')}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {linkedMindmaps.map((link) => (
+                      <Link
+                        key={`${link.mindmap_id}:${link.node_id}`}
+                        to={`/projects/${effectiveProjectId}/mindmaps/${link.mindmap_id}`}
+                        className="block rounded-xl border border-slate-200 bg-slate-50/80 p-3 hover:border-blue-300 hover:bg-blue-50/60 dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-blue-800"
+                      >
+                        <div className="text-sm font-semibold text-blue-700 dark:text-blue-300">{link.mindmap_name}</div>
+                        <div className="mt-1 text-xs text-slate-500">{link.node_title || link.node_id}</div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
             </Card>
 
             {tags.length > 0 && (

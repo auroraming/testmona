@@ -45,11 +45,11 @@ DEFAULT_PUBLIC_SETTINGS = {
     },
     "default_language": {
         "value": "en",
-        "description": "Default application language (en, fa, ar)",
+        "description": "Default application language (en, fa, ar, zh-CN)",
     },
 }
 
-ALLOWED_LANGUAGES = {"en", "fa", "ar"}
+ALLOWED_LANGUAGES = {"en", "fa", "ar", "zh-CN"}
 
 APP_NAME_MAX_LENGTH = 80
 APP_LOGO_URL_MAX_LENGTH = 500

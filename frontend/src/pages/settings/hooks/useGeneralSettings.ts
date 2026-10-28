@@ -11,7 +11,7 @@ import {
   SUPPORT_EMAIL_MAX_LENGTH, SUPPORT_EMAIL_SETTING_KEY, normalizeOptionalSetting, useAppName,
 } from '@/hooks/useAppName';
 
-type Lang = 'en' | 'fa' | 'ar';
+type Lang = 'en' | 'fa' | 'ar' | 'zh-CN';
 
 export function sanitizeLogoUrl(url: string): string {
   const trimmed = url.trim();
@@ -83,8 +83,8 @@ export function useGeneralSettings(isAdmin: boolean) {
       else await ensure(DEFAULT_TIMEZONE_SETTING_KEY, 'UTC', 'Default timezone');
 
       const lang = get('default_language');
-      if (lang && ['en', 'fa', 'ar'].includes(lang.value)) setDefaultLanguage(lang.value as Lang);
-      else if (!lang) await ensure('default_language', 'en', 'Default application language (en, fa, ar)');
+      if (lang && ['en', 'fa', 'ar', 'zh-CN'].includes(lang.value)) setDefaultLanguage(lang.value as Lang);
+      else if (!lang) await ensure('default_language', 'en', 'Default application language (en, fa, ar, zh-CN)');
 
       const maint = get('maintenance_mode');
       if (maint) setMaintenanceMode(maint.value === 'true');

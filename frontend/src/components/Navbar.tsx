@@ -36,6 +36,7 @@ const SECTION_LABEL_KEYS: Record<string, TranslationKey> = {
   projects: 'projects',
   requirements: 'requirements',
   'test-cases': 'testCases',
+  mindmaps: 'mindmaps',
   'test-suites': 'testSuites',
   'test-runs': 'testRuns',
   'test-plans': 'testPlans',

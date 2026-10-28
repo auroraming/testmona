@@ -82,7 +82,7 @@ interface AuthState {
   token: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
-  language: 'en' | 'fa' | 'ar';
+  language: 'en' | 'fa' | 'ar' | 'zh-CN';
   languageExplicitlySet: boolean;
   compactMode: boolean;
   appName: string;
@@ -90,10 +90,10 @@ interface AuthState {
   login: (usernameOrEmail: string, password: string, twoFactorCode?: string) => Promise<boolean | 'requires_2fa'>;
   logout: () => void;
   setUser: (user: User) => void;
-  setLanguage: (language: 'en' | 'fa' | 'ar') => void;
+  setLanguage: (language: 'en' | 'fa' | 'ar' | 'zh-CN') => void;
   // Applies a backend/system default language without marking it as the
   // user's explicit choice (so a real preference is never overwritten).
-  applyDefaultLanguage: (language: 'en' | 'fa' | 'ar') => void;
+  applyDefaultLanguage: (language: 'en' | 'fa' | 'ar' | 'zh-CN') => void;
   setCompactMode: (compactMode: boolean) => void;
   setAppName: (appName: string) => void;
   setAppLogoUrl: (appLogoUrl: string) => void;
@@ -213,13 +213,13 @@ export const useAuthStore = create<AuthState>()(
         set({ user });
       },
 
-      setLanguage: (language: 'en' | 'fa' | 'ar') => {
+      setLanguage: (language: 'en' | 'fa' | 'ar' | 'zh-CN') => {
         // An explicit user/admin choice — remember it so the system default
         // never overrides it later.
         set({ language, languageExplicitlySet: true });
       },
 
-      applyDefaultLanguage: (language: 'en' | 'fa' | 'ar') => {
+      applyDefaultLanguage: (language: 'en' | 'fa' | 'ar' | 'zh-CN') => {
         if (!get().languageExplicitlySet) {
           set({ language });
         }

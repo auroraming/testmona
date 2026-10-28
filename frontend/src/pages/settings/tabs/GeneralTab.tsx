@@ -82,12 +82,13 @@ export function GeneralTab() {
 
           <div className="rounded-2xl border border-border/60 p-4">
             <SettingToggleRow label={t('language')} description={t('languageDesc')}>
-              <Select value={language} onValueChange={(value) => { setLanguage(value as 'en' | 'fa' | 'ar'); success(t('languageUpdated')); }}>
+              <Select value={language} onValueChange={(value) => { setLanguage(value as 'en' | 'fa' | 'ar' | 'zh-CN'); success(t('languageUpdated')); }}>
                 <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="en">English</SelectItem>
                   <SelectItem value="fa">فارسی</SelectItem>
                   <SelectItem value="ar">العربية</SelectItem>
+                  <SelectItem value="zh-CN">简体中文</SelectItem>
                 </SelectContent>
               </Select>
             </SettingToggleRow>
@@ -145,12 +146,13 @@ export function GeneralTab() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="default-language">{t('defaultLanguageLabel')}</Label>
-                <Select value={g.defaultLanguage} onValueChange={(value) => g.setDefaultLanguage(value as 'en' | 'fa' | 'ar')} disabled={g.saving}>
+                <Select value={g.defaultLanguage} onValueChange={(value) => g.setDefaultLanguage(value as 'en' | 'fa' | 'ar' | 'zh-CN')} disabled={g.saving}>
                   <SelectTrigger id="default-language"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="en">🇬🇧&nbsp;&nbsp;English</SelectItem>
                     <SelectItem value="fa">🇮🇷&nbsp;&nbsp;فارسی</SelectItem>
                     <SelectItem value="ar">🇸🇦&nbsp;&nbsp;العربية</SelectItem>
+                    <SelectItem value="zh-CN">🇨🇳&nbsp;&nbsp;简体中文</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">{t('defaultLanguageDescription')}</p>

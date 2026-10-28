@@ -260,6 +260,44 @@ class TestMindmap(Base):
     # Relationships
     project = relationship("Project")
     creator = relationship("User", foreign_keys=[created_by])
+    test_case_links = relationship(
+        "TestMindmapTestCaseLink",
+        back_populates="mindmap",
+        cascade="all, delete-orphan",
+    )
+
+
+class TestMindmapTestCaseLink(Base):
+    __tablename__ = "test_mindmap_test_case_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "mindmap_id",
+            "node_id",
+            "test_case_id",
+            name="uq_mindmap_node_test_case",
+        ),
+        Index("ix_mindmap_links_mindmap_node", "mindmap_id", "node_id"),
+        Index("ix_mindmap_links_test_case", "test_case_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    mindmap_id = Column(
+        Integer,
+        ForeignKey("test_mindmaps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    node_id = Column(String(100), nullable=False)
+    test_case_id = Column(
+        Integer,
+        ForeignKey("test_cases.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    mindmap = relationship("TestMindmap", back_populates="test_case_links")
+    test_case = relationship("TestCase", back_populates="mindmap_links")
+    creator = relationship("User", foreign_keys=[created_by])
 
 
 class ImpactAnalysis(Base):

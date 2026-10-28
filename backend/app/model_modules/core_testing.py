@@ -121,6 +121,11 @@ class TestCase(Base):
     dataset = relationship("TestDataset", foreign_keys=[dataset_id])
     creator = relationship("User", foreign_keys=[created_by])
     project = relationship("Project")
+    mindmap_links = relationship(
+        "TestMindmapTestCaseLink",
+        back_populates="test_case",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("uq_test_cases_project_seq", "project_id", "project_seq", unique=True),

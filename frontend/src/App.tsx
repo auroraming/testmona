@@ -31,6 +31,7 @@ const PublicDoc = lazyPage(() => import('@/pages/PublicDoc'), 'PublicDoc');
 const TestSuites = lazyPage(() => import('@/pages/TestSuites'), 'TestSuites');
 const TestSuiteDetail = lazyPage(() => import('@/pages/TestSuiteDetail'), 'TestSuiteDetail');
 const TestCases = lazyPage(() => import('@/pages/TestCases'), 'TestCases');
+const Mindmaps = lazyPage(() => import('@/pages/Mindmaps'), 'Mindmaps');
 const TestCaseDetail = lazyPage(() => import('@/pages/TestCaseDetail'), 'TestCaseDetail');
 const TestCaseEdit = lazyPage(() => import('@/pages/TestCaseEdit'), 'TestCaseEdit');
 const TestCaseRevisions = lazyPage(() => import('@/pages/TestCaseRevisions'), 'TestCaseRevisions');
@@ -194,7 +195,7 @@ function AppWithRouter() {
       .then((res) => (res.ok ? res.json() : null))
       .then((setting) => {
         const value = setting?.value;
-        if (value === 'en' || value === 'fa' || value === 'ar') {
+        if (value === 'en' || value === 'fa' || value === 'ar' || value === 'zh-CN') {
           applyDefaultLanguage(value);
         }
       })
@@ -291,6 +292,20 @@ function AppWithRouter() {
           <ProjectGuard>
             <FeatureGuard feature="test_cases">
               <TestCases />
+            </FeatureGuard>
+          </ProjectGuard>
+        } />
+        <Route path="/projects/:projectId/mindmaps" element={
+          <ProjectGuard>
+            <FeatureGuard feature="test_cases">
+              <Mindmaps />
+            </FeatureGuard>
+          </ProjectGuard>
+        } />
+        <Route path="/projects/:projectId/mindmaps/:mindmapId" element={
+          <ProjectGuard>
+            <FeatureGuard feature="test_cases">
+              <Mindmaps />
             </FeatureGuard>
           </ProjectGuard>
         } />

@@ -115,6 +115,7 @@ import { TestCaseSearchBar, SearchSuggestionGroup } from '@/components/TestCases
 import { parseSearchQuery, testCaseMatchesQuery } from '@/components/TestCases/searchQuery';
 import { SavedFilters } from '@/components/SavedFilters';
 import { BulkEditTestCasesDialog } from '@/components/BulkEditTestCasesDialog';
+import { OpenAPIImportDialog } from '@/components/OpenAPIImportDialog';
 
 const CUSTOM_FIELD_FILTER_ALL = 'all';
 const CUSTOM_FIELD_FILTER_ANY_VALUE = '__any__';
@@ -266,6 +267,7 @@ export function TestCases() {
 
   // Import dialog state
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isOpenAPIImportOpen, setIsOpenAPIImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importSectionId, setImportSectionId] = useState<string>('none');
   const [isImportDragActive, setIsImportDragActive] = useState(false);
@@ -763,7 +765,12 @@ export function TestCases() {
           const sectionData: Section = {
             id: section.id.toString(),
             name: section.name,
-            testCaseCount: section.test_case_count || 0,
+            testCaseCount: section.direct_case_count ?? section.test_case_count ?? 0,
+            directCaseCount: section.direct_case_count ?? section.test_case_count ?? 0,
+            descendantCaseCount: section.descendant_case_count ?? 0,
+            cumulativeCount: section.total_case_count ?? section.test_case_count ?? 0,
+            fullPath: section.full_path,
+            path: section.path,
             expanded: level === 0, // Expand root sections by default
             parentId: parentId,
             children: [],
@@ -1038,10 +1045,13 @@ export function TestCases() {
       const hasChildren = section.children && section.children.length > 0;
       const isRoot = level === 0;
 
-      // Calculate counts correctly
-      const directCount = apiTestCases.filter(tc => tc.section_id === parseInt(section.id)).length;
+      // Prefer project-wide server aggregates.  Counting ``apiTestCases`` here
+      // under-reports folders whenever the paginated list has not loaded every
+      // case in the project.
+      const directCount = section.directCaseCount ?? section.testCaseCount ?? 0;
       const calculateCumulativeCount = (sec: Section): number => {
-        let count = apiTestCases.filter(tc => tc.section_id === parseInt(sec.id)).length;
+        if (sec.cumulativeCount !== undefined) return sec.cumulativeCount;
+        let count = sec.directCaseCount ?? sec.testCaseCount ?? 0;
         if (sec.children && sec.children.length > 0) {
           sec.children.forEach(child => {
             count += calculateCumulativeCount(child);
@@ -2839,6 +2849,12 @@ export function TestCases() {
             <Upload className={`h-4 w-4 ${isRTL ? 'ml-2' : 'mr-2'}`} />
             {t('importCSV')}
           </Button>
+          {currentProjectId && currentTestSuiteId && (
+            <Button variant="outline" onClick={() => setIsOpenAPIImportOpen(true)}>
+              <FileText className={`h-4 w-4 ${isRTL ? 'ml-2' : 'mr-2'}`} />
+              {t('importOpenAPI')}
+            </Button>
+          )}
           {isTestSuiteLoading ? (
             <Button disabled>
               {t('loading')}
@@ -4888,6 +4904,19 @@ export function TestCases() {
           setSelectedTestCases([]);
         }}
       />
+      {currentProjectId && currentTestSuiteId && (
+        <OpenAPIImportDialog
+          open={isOpenAPIImportOpen}
+          onOpenChange={setIsOpenAPIImportOpen}
+          projectId={currentProjectId}
+          testSuiteId={currentTestSuiteId}
+          sectionId={urlSectionId && Number(urlSectionId) > 0 ? Number(urlSectionId) : undefined}
+          onImported={async () => {
+            await loadTestCases();
+            await loadSections();
+          }}
+        />
+      )}
     </div>
   );
 }

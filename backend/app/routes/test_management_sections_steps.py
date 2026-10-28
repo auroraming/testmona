@@ -68,10 +68,47 @@ def register_section_step_routes(app):
                 counts_by_section[sid] = int(cnt or 0)
 
         children_by_parent: dict[Optional[int], list[models.TestCaseSection]] = {}
+        section_by_id: dict[int, models.TestCaseSection] = {}
         for sec in all_sections:
             children_by_parent.setdefault(sec.parent_section_id, []).append(sec)
+            section_by_id[sec.id] = sec
+
+        total_count_cache: dict[int, int] = {}
+
+        def total_case_count(section_id: int, visiting: Optional[set[int]] = None) -> int:
+            """Return direct + descendant cases without loading case rows.
+
+            The write endpoints reject section cycles.  The small ``visiting``
+            guard also keeps this read endpoint safe if legacy/corrupt data
+            contains one.
+            """
+            if section_id in total_count_cache:
+                return total_count_cache[section_id]
+            visiting = set(visiting or ())
+            if section_id in visiting:
+                return counts_by_section.get(section_id, 0)
+            visiting.add(section_id)
+            total = counts_by_section.get(section_id, 0)
+            for child in children_by_parent.get(section_id, []):
+                total += total_case_count(child.id, visiting)
+            total_count_cache[section_id] = total
+            return total
+
+        def section_path(section: models.TestCaseSection) -> list[dict]:
+            path: list[dict] = []
+            current: Optional[models.TestCaseSection] = section
+            visited: set[int] = set()
+            while current is not None and current.id not in visited:
+                visited.add(current.id)
+                path.append({"id": current.id, "name": current.name})
+                current = section_by_id.get(current.parent_section_id) if current.parent_section_id else None
+            path.reverse()
+            return path
 
         def build_node(section: models.TestCaseSection) -> dict:
+            direct_count = counts_by_section.get(section.id, 0)
+            total_count = total_case_count(section.id)
+            path = section_path(section)
             return {
                 "id": section.id,
                 "name": section.name,
@@ -79,7 +116,14 @@ def register_section_step_routes(app):
                 "test_suite_id": section.test_suite_id,
                 "parent_section_id": section.parent_section_id,
                 "order_index": section.order_index,
-                "test_case_count": counts_by_section.get(section.id, 0),
+                # ``test_case_count`` is retained for older clients and means
+                # direct membership, matching its historical behaviour.
+                "test_case_count": direct_count,
+                "direct_case_count": direct_count,
+                "descendant_case_count": max(total_count - direct_count, 0),
+                "total_case_count": total_count,
+                "path": path,
+                "full_path": " / ".join(part["name"] for part in path),
                 "subsections": [build_node(child) for child in children_by_parent.get(section.id, [])],
             }
 
