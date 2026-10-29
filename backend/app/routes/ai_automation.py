@@ -188,6 +188,19 @@ def register_ai_automation_routes(app) -> None:
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return task
 
+    @app.get("/ai-automation/tasks/{task_id}/evidence", response_model=list[schemas.AIAutomationEvidence])
+    def list_ai_automation_evidence(
+        task_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        task = _get_task(db, task_id)
+        if not rbac.has_permission(current_user, "read", task.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return db.query(models.AIAutomationEvidence).filter(
+            models.AIAutomationEvidence.task_id == task.id
+        ).order_by(models.AIAutomationEvidence.sequence).all()
+
     @app.post("/ai-automation/tasks/{task_id}/cancel", response_model=schemas.AIAutomationTask)
     def cancel_ai_automation_task(
         task_id: int = Path(..., ge=1),
@@ -297,3 +310,48 @@ def register_ai_automation_routes(app) -> None:
         db.commit()
         db.refresh(task)
         return task
+
+    @app.post(
+        "/internal/ai-automation/tasks/{task_id}/evidence",
+        response_model=list[schemas.AIAutomationEvidence],
+    )
+    def append_ai_automation_evidence(
+        payload: schemas.AIAutomationEvidenceBatch,
+        task_id: int = Path(..., ge=1),
+        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+        db: Session = Depends(get_db),
+    ):
+        runner = _authenticate_runner(db, x_runner_token)
+        task = _get_task(db, task_id)
+        _verify_lease(task, runner, payload.lease_token)
+        if task.status not in {"running", "cancel_requested"}:
+            raise HTTPException(status_code=409, detail="Evidence can only be appended while a task is active")
+
+        existing = {
+            item.sequence: item
+            for item in db.query(models.AIAutomationEvidence).filter(
+                models.AIAutomationEvidence.task_id == task.id,
+                models.AIAutomationEvidence.sequence.in_([item.sequence for item in payload.items]),
+            ).all()
+        }
+        results = []
+        for item in payload.items:
+            current = existing.get(item.sequence)
+            item_data = item.model_dump()
+            if current is not None:
+                comparable = {key: getattr(current, key) for key in item_data}
+                if comparable != item_data:
+                    raise HTTPException(status_code=409, detail=f"Evidence sequence {item.sequence} already has different content")
+                results.append(current)
+                continue
+            evidence = models.AIAutomationEvidence(task_id=task.id, **item_data)
+            db.add(evidence)
+            results.append(evidence)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="Evidence sequence conflict") from exc
+        for item in results:
+            db.refresh(item)
+        return sorted(results, key=lambda item: item.sequence)

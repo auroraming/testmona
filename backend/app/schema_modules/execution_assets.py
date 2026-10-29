@@ -37,6 +37,21 @@ TEST_DEBT_SEVERITIES = {"low", "medium", "high", "critical"}
 TEST_DEBT_ACTIONS = {"update", "merge", "archive", "link_req", "review"}
 AI_AUTOMATION_RUNNER_TYPES = {"web", "mobile", "api"}
 AI_AUTOMATION_EXECUTION_MODES = {"ai", "script"}
+AI_AUTOMATION_EVIDENCE_TYPES = {"step", "assertion", "log", "screenshot", "trace", "network"}
+
+
+def _contains_inline_secret(value: Any) -> bool:
+    forbidden = {"apikey", "authorization", "password", "secret", "token", "accesstoken"}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized_key in forbidden or normalized_key.endswith(tuple(forbidden)):
+                return True
+            if _contains_inline_secret(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_inline_secret(child) for child in value)
+    return False
 
 
 class TestDebtItemBase(BaseModel):
@@ -857,22 +872,7 @@ class AIAutomationTaskCreate(BaseModel):
     @field_validator("config")
     @classmethod
     def reject_inline_secrets(cls, value: Dict[str, Any]) -> Dict[str, Any]:
-        forbidden = {"apikey", "authorization", "password", "secret", "token", "accesstoken"}
-
-        def walk(item: Any) -> bool:
-            if isinstance(item, dict):
-                for key, child in item.items():
-                    normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
-                    if normalized_key in forbidden or normalized_key.endswith(tuple(forbidden)):
-                        return True
-                    if walk(child):
-                        return True
-                return False
-            if isinstance(item, list):
-                return any(walk(child) for child in item)
-            return False
-
-        if walk(value):
+        if _contains_inline_secret(value):
             raise ValueError("config must use credential references and cannot contain inline secrets")
         if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
             raise ValueError("config cannot exceed 64 KB")
@@ -984,3 +984,68 @@ class AIAutomationTaskReport(BaseModel):
         if normalized not in {"passed", "failed", "blocked", "timed_out", "cancelled"}:
             raise ValueError("status must be a terminal task status")
         return normalized
+
+
+class AIAutomationEvidenceCreate(BaseModel):
+    sequence: int = Field(..., ge=1, le=1_000_000)
+    evidence_type: str = Field(..., min_length=1, max_length=30)
+    title: str = Field(..., min_length=1, max_length=255)
+    status: Optional[str] = Field(None, max_length=30)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    artifact_ref: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("evidence_type")
+    @classmethod
+    def validate_evidence_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_EVIDENCE_TYPES:
+            raise ValueError("unsupported evidence type")
+        return normalized
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title cannot be empty")
+        return normalized
+
+    @field_validator("payload")
+    @classmethod
+    def validate_payload(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if _contains_inline_secret(value):
+            raise ValueError("evidence cannot contain inline secrets")
+        if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
+            raise ValueError("evidence payload cannot exceed 64 KB")
+        return value
+
+    @field_validator("artifact_ref")
+    @classmethod
+    def validate_artifact_ref(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if "://" in normalized or normalized.startswith(("/", "..")) or "../" in normalized:
+            raise ValueError("artifact_ref must be a storage reference, not a URL or filesystem path")
+        return normalized
+
+
+class AIAutomationEvidence(BaseModel):
+    id: int
+    task_id: int
+    sequence: int
+    evidence_type: str
+    title: str
+    status: Optional[str] = None
+    payload: Dict[str, Any]
+    artifact_ref: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationEvidenceBatch(BaseModel):
+    lease_token: str = Field(..., min_length=20, max_length=200)
+    items: List[AIAutomationEvidenceCreate] = Field(..., min_length=1, max_length=100)

@@ -227,3 +227,92 @@ def test_runner_token_rotation_and_disable_revoke_access(client):
         "/internal/ai-automation/claim",
         headers={"X-Runner-Token": new_token},
     ).status_code == 401
+
+
+def test_runner_appends_ordered_idempotent_evidence(client):
+    _, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Capture evidence",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    payload = {
+        "lease_token": lease["lease_token"],
+        "items": [
+            {
+                "sequence": 2,
+                "evidence_type": "assertion",
+                "title": "Login succeeded",
+                "status": "passed",
+                "payload": {"expected": "dashboard", "actual": "dashboard"},
+            },
+            {
+                "sequence": 1,
+                "evidence_type": "screenshot",
+                "title": "Login form",
+                "payload": {"mime_type": "image/png"},
+                "artifact_ref": "ai-tasks/1/login.png",
+            },
+        ],
+    }
+    first = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json=payload,
+    )
+    assert first.status_code == 200, first.text
+    assert [item["sequence"] for item in first.json()] == [1, 2]
+
+    repeated = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json=payload,
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert [item["id"] for item in repeated.json()] == [item["id"] for item in first.json()]
+
+    listed = client.get(f"/ai-automation/tasks/{task['id']}/evidence")
+    assert listed.status_code == 200, listed.text
+    assert [item["sequence"] for item in listed.json()] == [1, 2]
+
+    conflict = payload.copy()
+    conflict["items"] = [{
+        "sequence": 1,
+        "evidence_type": "log",
+        "title": "Different content",
+        "payload": {},
+    }]
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json=conflict,
+    )
+    assert response.status_code == 409
+
+
+def test_evidence_rejects_secrets_and_external_artifact_urls(client):
+    _, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Reject unsafe evidence",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={
+            "lease_token": lease["lease_token"],
+            "items": [{
+                "sequence": 1,
+                "evidence_type": "network",
+                "title": "Request",
+                "payload": {"headers": {"Authorization": "Bearer secret"}},
+                "artifact_ref": "https://evil.example/file",
+            }],
+        },
+    )
+    assert response.status_code == 422

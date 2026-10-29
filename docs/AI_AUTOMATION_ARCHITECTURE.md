@@ -40,3 +40,12 @@ never marks a test as passed; independent assertions still determine outcomes.
 - Runner callbacks use expiring leases, and repeated equivalent terminal reports
   are idempotent. Step evidence storage and audit events remain required before
   a production Runner is enabled.
+
+## Evidence contract
+
+Active runners append immutable evidence with a task-local sequence number.
+Supported types are step, assertion, log, screenshot, trace, and network.
+Retries with the same sequence and content are idempotent; conflicting content
+is rejected. Binary files remain in controlled object storage and evidence only
+stores a relative storage reference. External URLs, filesystem paths, oversized
+payloads, and credential-shaped fields are rejected.

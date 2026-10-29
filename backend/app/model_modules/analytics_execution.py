@@ -581,3 +581,25 @@ class AIAutomationRunner(Base):
 
     project = relationship("Project")
     creator = relationship("User", foreign_keys=[created_by])
+
+
+class AIAutomationEvidence(Base):
+    """Immutable, ordered evidence emitted by an automation runner."""
+
+    __tablename__ = "ai_automation_evidence"
+    __table_args__ = (
+        UniqueConstraint("task_id", "sequence", name="uq_ai_automation_evidence_task_sequence"),
+        Index("ix_ai_automation_evidence_task_created", "task_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False)
+    evidence_type = Column(String(30), nullable=False)
+    title = Column(String(255), nullable=False)
+    status = Column(String(30), nullable=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    artifact_ref = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask")
