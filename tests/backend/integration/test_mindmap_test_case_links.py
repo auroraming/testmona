@@ -58,6 +58,10 @@ def test_mindmap_links_are_idempotent_and_reverse_queryable(client):
     assert repeated.status_code == 200, repeated.text
     assert len(repeated.json()) == 1
 
+    summary = client.get(f"/test-mindmaps/{mindmap_id}/links-summary")
+    assert summary.status_code == 200, summary.text
+    assert summary.json() == {"login": 1}
+
     reverse = client.get(f"/test-cases/{case_id}/mindmaps")
     assert reverse.status_code == 200, reverse.text
     assert reverse.json() == [{
@@ -72,6 +76,7 @@ def test_mindmap_links_are_idempotent_and_reverse_queryable(client):
     )
     assert removed.status_code == 200, removed.text
     assert client.get(f"/test-cases/{case_id}/mindmaps").json() == []
+    assert client.get(f"/test-mindmaps/{mindmap_id}/links-summary").json() == {}
 
 def test_mindmap_links_reject_unknown_nodes_and_cross_project_cases(client):
     suite_id = _suite(client, client.project_id, "Core")

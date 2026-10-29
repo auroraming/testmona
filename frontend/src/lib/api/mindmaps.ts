@@ -5,6 +5,7 @@ export interface MindmapNode {
   title: string;
   parentId: string | null;
   collapsed?: boolean;
+  direction?: 0 | 1;
 }
 
 export interface MindmapData {
@@ -50,6 +51,10 @@ export const mindmapsAPI = {
   },
   get: async (id: number): Promise<TestMindmap> => {
     const response = await api.get(`/test-mindmaps/${id}`);
+    return response.data;
+  },
+  getLinkSummary: async (id: number): Promise<Record<string, number>> => {
+    const response = await api.get(`/test-mindmaps/${id}/links-summary`);
     return response.data;
   },
   create: async (payload: Pick<TestMindmap, 'name' | 'description' | 'project_id' | 'mindmap_data'>): Promise<TestMindmap> => {

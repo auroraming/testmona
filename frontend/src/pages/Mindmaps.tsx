@@ -1,29 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link2, Loader2, Plus, Save, Trash2, Unlink } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { NodeObj } from 'mind-elixir';
+import { Loader2, Plus, Save, Trash2, Unlink } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { MindmapCanvas, type MindmapCanvasHandle } from '@/components/MindmapCanvas';
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
-import {
-  getApiErrorMessage,
-  mindmapsAPI,
-  testCasesAPI,
-  type MindmapData,
-  type MindmapLinkedTestCase,
-  type MindmapNode,
-  type TestMindmap,
-} from '@/lib/api';
+import { fromMindElixirData, toMindElixirData } from '@/lib/mindmapAdapters';
+import { getApiErrorMessage, mindmapsAPI, testCasesAPI, type MindmapData, type MindmapLinkedTestCase, type MindmapNode, type TestMindmap } from '@/lib/api';
 
 const freshData = (title: string): MindmapData => {
   const rootId = crypto.randomUUID();
@@ -36,11 +25,14 @@ export function Mindmaps() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { t } = useTranslation();
+  const canvasRef = useRef<MindmapCanvasHandle>(null);
   const [mindmaps, setMindmaps] = useState<TestMindmap[]>([]);
   const [selected, setSelected] = useState<TestMindmap | null>(null);
   const [data, setData] = useState<MindmapData | null>(null);
+  const [linkCounts, setLinkCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
@@ -57,9 +49,16 @@ export function Mindmaps() {
       const rows = await mindmapsAPI.list(numericProjectId);
       setMindmaps(rows);
       if (mindmapId) {
-        const row = await mindmapsAPI.get(Number(mindmapId));
+        const id = Number(mindmapId);
+        const [row, counts] = await Promise.all([mindmapsAPI.get(id), mindmapsAPI.getLinkSummary(id)]);
         setSelected(row);
         setData(row.mindmap_data || freshData(row.name));
+        setLinkCounts(counts);
+        setDirty(false);
+      } else {
+        setSelected(null);
+        setData(null);
+        setLinkCounts({});
       }
     } catch (error) {
       toast({ title: t('mindmapLoadFailed'), description: getApiErrorMessage(error, t('mindmapLoadFailed')), variant: 'destructive' });
@@ -70,26 +69,15 @@ export function Mindmaps() {
 
   useEffect(() => { void loadList(); }, [numericProjectId, mindmapId]);
 
-  const childrenByParent = useMemo(() => {
-    const result = new Map<string | null, MindmapNode[]>();
-    for (const node of data?.nodes || []) {
-      const siblings = result.get(node.parentId) || [];
-      siblings.push(node);
-      result.set(node.parentId, siblings);
-    }
-    return result;
-  }, [data]);
+  // The canvas owns edits after mounting. Recreate it only when a different
+  // map (root id) is selected; ordinary operations are read through its ref.
+  const canvasData = useMemo(() => data ? toMindElixirData(data, linkCounts) : null, [data?.rootId]);
 
   const createMindmap = async () => {
     const name = newName.trim();
     if (!name) return;
     try {
-      const created = await mindmapsAPI.create({
-        name,
-        description: newDescription.trim() || null,
-        project_id: numericProjectId,
-        mindmap_data: freshData(name),
-      });
+      const created = await mindmapsAPI.create({ name, description: newDescription.trim() || null, project_id: numericProjectId, mindmap_data: freshData(name) });
       setCreateOpen(false);
       setNewName('');
       setNewDescription('');
@@ -100,11 +88,16 @@ export function Mindmaps() {
   };
 
   const saveMindmap = async () => {
-    if (!selected || !data) return;
+    if (!selected) return;
+    const current = canvasRef.current?.getData();
+    if (!current) return;
+    const normalized = fromMindElixirData(current);
     setSaving(true);
     try {
-      const updated = await mindmapsAPI.update(selected.id, { mindmap_data: data });
+      const updated = await mindmapsAPI.update(selected.id, { mindmap_data: normalized });
       setSelected(updated);
+      setData(normalized);
+      setDirty(false);
       toast({ title: t('mindmapSaved') });
     } catch (error) {
       toast({ title: t('mindmapSaveFailed'), description: getApiErrorMessage(error, t('mindmapSaveFailed')), variant: 'destructive' });
@@ -113,45 +106,13 @@ export function Mindmaps() {
     }
   };
 
-  const addChild = (parentId: string) => {
-    setData((current) => current ? {
-      ...current,
-      nodes: [...current.nodes, { id: crypto.randomUUID(), title: t('mindmapNewNode'), parentId }],
-    } : current);
-  };
-
-  const renameNode = (id: string, title: string) => {
-    setData((current) => current ? {
-      ...current,
-      nodes: current.nodes.map((node) => node.id === id ? { ...node, title } : node),
-    } : current);
-  };
-
-  const deleteNode = (id: string) => {
-    if (!data || id === data.rootId) return;
-    const remove = new Set<string>([id]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const node of data.nodes) {
-        if (node.parentId && remove.has(node.parentId) && !remove.has(node.id)) {
-          remove.add(node.id);
-          changed = true;
-        }
-      }
-    }
-    setData({ ...data, nodes: data.nodes.filter((node) => !remove.has(node.id)) });
-  };
-
-  const openLinks = async (node: MindmapNode) => {
+  const openLinks = async (node: NodeObj) => {
     if (!selected) return;
-    setLinkNode(node);
+    const normalizedNode: MindmapNode = { id: node.id, title: node.topic, parentId: null };
+    setLinkNode(normalizedNode);
     setCaseQuery('');
     try {
-      const [cases, links] = await Promise.all([
-        testCasesAPI.getAllPages(numericProjectId),
-        mindmapsAPI.listNodeCases(selected.id, node.id),
-      ]);
+      const [cases, links] = await Promise.all([testCasesAPI.getAllPages(numericProjectId), mindmapsAPI.listNodeCases(selected.id, node.id)]);
       setAvailableCases(cases);
       setLinkedCases(links);
       setPickedCaseIds(new Set());
@@ -160,11 +121,14 @@ export function Mindmaps() {
     }
   };
 
+  const refreshLinkCount = (nodeId: string, count: number) => setLinkCounts((current) => ({ ...current, [nodeId]: count }));
+
   const addLinks = async () => {
     if (!selected || !linkNode || pickedCaseIds.size === 0) return;
     try {
       const links = await mindmapsAPI.linkCases(selected.id, linkNode.id, [...pickedCaseIds]);
       setLinkedCases(links);
+      refreshLinkCount(linkNode.id, links.length);
       setPickedCaseIds(new Set());
     } catch (error) {
       toast({ title: t('mindmapLinkFailed'), description: getApiErrorMessage(error, t('mindmapLinkFailed')), variant: 'destructive' });
@@ -174,7 +138,9 @@ export function Mindmaps() {
   const unlinkCase = async (testCaseId: number) => {
     if (!selected || !linkNode) return;
     await mindmapsAPI.unlinkCase(selected.id, linkNode.id, testCaseId);
-    setLinkedCases((current) => current.filter((item) => item.id !== testCaseId));
+    const next = linkedCases.filter((item) => item.id !== testCaseId);
+    setLinkedCases(next);
+    refreshLinkCount(linkNode.id, next.length);
   };
 
   const removeMindmap = async (mindmap: TestMindmap) => {
@@ -183,20 +149,6 @@ export function Mindmaps() {
     if (selected?.id === mindmap.id) navigate(`/projects/${numericProjectId}/mindmaps`);
     else void loadList();
   };
-
-  const renderNodes = (parentId: string | null, level = 0): React.ReactNode => (
-    (childrenByParent.get(parentId) || []).map((node) => (
-      <div key={node.id} className="space-y-2" style={{ marginInlineStart: level * 24 }}>
-        <div className="flex items-center gap-2 rounded-lg border bg-card p-2">
-          <Input value={node.title} onChange={(event) => renameNode(node.id, event.target.value)} className="h-8" />
-          <Button size="sm" variant="outline" onClick={() => addChild(node.id)}><Plus className="h-4 w-4" /></Button>
-          <Button size="sm" variant="outline" onClick={() => void openLinks(node)}><Link2 className="h-4 w-4" /></Button>
-          {node.id !== data?.rootId && <Button size="sm" variant="ghost" onClick={() => deleteNode(node.id)}><Trash2 className="h-4 w-4" /></Button>}
-        </div>
-        {renderNodes(node.id, level + 1)}
-      </div>
-    ))
-  );
 
   const linkedIds = new Set(linkedCases.map((item) => item.id));
   const filteredCases = availableCases.filter((item) => {
@@ -212,16 +164,16 @@ export function Mindmaps() {
         <div><h1 className="text-2xl font-bold">{t('mindmaps')}</h1><p className="text-sm text-muted-foreground">{t('mindmapsDescription')}</p></div>
         <Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" />{t('newMindmap')}</Button>
       </div>
-      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
         <Card><CardHeader><CardTitle className="text-base">{t('mindmaps')}</CardTitle></CardHeader><CardContent className="space-y-2">
           {mindmaps.length === 0 && <p className="text-sm text-muted-foreground">{t('noMindmaps')}</p>}
           {mindmaps.map((mindmap) => <div key={mindmap.id} className="flex items-center gap-1">
-            <Button className="flex-1 justify-start" variant={selected?.id === mindmap.id ? 'secondary' : 'ghost'} onClick={() => navigate(`/projects/${numericProjectId}/mindmaps/${mindmap.id}`)}>{mindmap.name}</Button>
+            <Button className="flex-1 justify-start truncate" variant={selected?.id === mindmap.id ? 'secondary' : 'ghost'} onClick={() => navigate(`/projects/${numericProjectId}/mindmaps/${mindmap.id}`)}>{mindmap.name}</Button>
             <Button size="icon" variant="ghost" onClick={() => void removeMindmap(mindmap)}><Trash2 className="h-4 w-4" /></Button>
           </div>)}
         </CardContent></Card>
-        <Card><CardHeader><div className="flex items-center justify-between"><CardTitle>{selected?.name || t('selectMindmap')}</CardTitle>{selected && <Button onClick={() => void saveMindmap()} disabled={saving}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}{t('save')}</Button>}</div></CardHeader>
-          <CardContent className="space-y-2">{data ? renderNodes(null) : <p className="text-sm text-muted-foreground">{t('selectMindmapDescription')}</p>}</CardContent>
+        <Card className="min-w-0"><CardHeader><div className="flex items-center justify-between gap-3"><div><CardTitle>{selected?.name || t('selectMindmap')}</CardTitle>{selected && <p className="mt-1 text-xs text-muted-foreground">{t('mindmapCanvasHint')}</p>}</div>{selected && <Button onClick={() => void saveMindmap()} disabled={saving || !dirty}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}{t('save')}</Button>}</div></CardHeader>
+          <CardContent>{canvasData ? <MindmapCanvas ref={canvasRef} value={canvasData} newNodeLabel={t('mindmapNewNode')} linkLabel={t('mindmapLinkTestCases')} linkCounts={linkCounts} onChange={() => setDirty(true)} onLinkCases={(node) => void openLinks(node)} /> : <p className="text-sm text-muted-foreground">{t('selectMindmapDescription')}</p>}</CardContent>
         </Card>
       </div>
 

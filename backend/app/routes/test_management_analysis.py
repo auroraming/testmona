@@ -175,6 +175,41 @@ def register_analysis_routes(app):
             for link, test_case in rows
         ]
 
+    @app.get("/test-mindmaps/{mindmap_id}/links-summary")
+    def read_mindmap_links_summary(
+        mindmap_id: int,
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        """Return per-node link counts in one query for canvas badges."""
+        mindmap = crud.get_test_mindmap(db, mindmap_id=mindmap_id)
+        if mindmap is None:
+            raise HTTPException(status_code=404, detail="Test mindmap not found")
+        if not rbac.has_permission(current_user, "read", mindmap.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        valid_node_ids = set(_mindmap_nodes(mindmap.mindmap_data))
+        rows = (
+            db.query(
+                models.TestMindmapTestCaseLink.node_id,
+                func.count(models.TestMindmapTestCaseLink.id),
+            )
+            .join(
+                models.TestCase,
+                models.TestCase.id == models.TestMindmapTestCaseLink.test_case_id,
+            )
+            .filter(
+                models.TestMindmapTestCaseLink.mindmap_id == mindmap_id,
+                ((models.TestCase.is_deleted.is_(None)) | (models.TestCase.is_deleted.is_(False))),
+            )
+            .group_by(models.TestMindmapTestCaseLink.node_id)
+            .all()
+        )
+        return {
+            node_id: int(count)
+            for node_id, count in rows
+            if node_id in valid_node_ids
+        }
+
     @app.post(
         "/test-mindmaps/{mindmap_id}/nodes/{node_id}/test-cases",
         response_model=List[schemas.TestMindmapLinkedTestCase],

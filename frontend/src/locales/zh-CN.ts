@@ -39,6 +39,8 @@ export const zhCN: typeof en = {
   selectMindmapDescription: '从列表选择脑图，或新建一个脑图。',
   mindmapName: '脑图名称',
   mindmapNewNode: '新节点',
+  mindmapCanvasHint: '双击编辑节点；Tab 新增子节点，Enter 新增同级节点；拖动画布平移，滚轮缩放。',
+  mindmapLinkTestCases: '关联测试用例',
   mindmapSaved: '脑图已保存。',
   mindmapLoadFailed: '加载脑图失败。',
   mindmapCreateFailed: '创建脑图失败。',

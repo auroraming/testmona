@@ -114,6 +114,8 @@ export const en = {
   selectMindmapDescription: 'Choose a mind map from the list or create a new one.',
   mindmapName: 'Mind map name',
   mindmapNewNode: 'New node',
+  mindmapCanvasHint: 'Double-click to edit. Tab adds a child; Enter adds a sibling. Drag the canvas to pan and use the mouse wheel to zoom.',
+  mindmapLinkTestCases: 'Link test cases',
   mindmapSaved: 'Mind map saved.',
   mindmapLoadFailed: 'Failed to load mind maps.',
   mindmapCreateFailed: 'Failed to create mind map.',
