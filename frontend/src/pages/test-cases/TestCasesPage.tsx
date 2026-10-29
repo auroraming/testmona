@@ -2907,6 +2907,21 @@ export function TestCases() {
     }
   };
 
+  const loadMindmapCaseSteps = async (testCaseId: number) => testCasesAPI.getSteps(testCaseId);
+
+  const updateMindmapCaseSteps = async (
+    testCaseId: number,
+    steps: Array<{ step_number: number; action: string; expected_result: string; step_type: string }>,
+  ) => {
+    try {
+      await testCasesAPI.createWithSteps(testCaseId, steps);
+      await loadTestCases();
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
   const createMindmapCase = (sectionId: number | null) => {
     if (!currentTestSuiteId) return;
     setSelectedTestSuite(sectionId ? String(sectionId) : getUnsectionedSelectionValue(currentTestSuiteId));
@@ -2978,19 +2993,54 @@ export function TestCases() {
           }
           return undefined;
         };
-        const cloneSection = async (source: Section, parentId: number | null, isRoot = false) => {
-          const created = await sectionsAPI.create({
-            name: isRoot ? `${source.name} (${t('copy')})` : source.name,
-            test_suite_id: currentTestSuiteId,
-            parent_section_id: parentId,
-          });
-          const directCases = apiTestCases.filter((testCase) => testCase.section_id === Number(source.id));
-          for (const testCase of directCases) await copyMindmapCase(testCase, created.id);
-          for (const child of source.children || []) await cloneSection(child, created.id);
-        };
         const source = findSection(mindmapSections, node.id);
         if (!source) throw new Error(t('sectionNotFound'));
+        const countTree = (section: Section): { modules: number; cases: number } => (section.children || []).reduce(
+          (total, child) => {
+            const nested = countTree(child);
+            return { modules: total.modules + nested.modules, cases: total.cases + nested.cases };
+          },
+          {
+            modules: 1,
+            cases: apiTestCases.filter((testCase) => testCase.section_id === Number(section.id)).length,
+          },
+        );
+        const impact = countTree(source);
+        if (!window.confirm(t('mindmapCopyModuleConfirm', { modules: impact.modules, cases: impact.cases }))) return;
+
+        const failures: string[] = [];
+        const cloneSection = async (section: Section, parentId: number | null, isRoot = false) => {
+          let created: Section;
+          try {
+            created = await sectionsAPI.create({
+              name: isRoot ? `${section.name} (${t('copy')})` : section.name,
+              test_suite_id: currentTestSuiteId,
+              parent_section_id: parentId,
+            });
+          } catch (error) {
+            failures.push(`${section.name}: ${getApiErrorMessage(error, t('operationFailed'))}`);
+            return;
+          }
+          const directCases = apiTestCases.filter((testCase) => testCase.section_id === Number(section.id));
+          for (const testCase of directCases) {
+            try {
+              await copyMindmapCase(testCase, Number(created.id));
+            } catch (error) {
+              failures.push(`${testCase.title}: ${getApiErrorMessage(error, t('operationFailed'))}`);
+            }
+          }
+          for (const child of section.children || []) await cloneSection(child, Number(created.id));
+        };
         await cloneSection(source, targetSectionId, true);
+        if (failures.length) {
+          await Promise.all([loadTestCases(), loadSections()]);
+          toast({
+            title: t('mindmapCopyPartialFailure', { count: failures.length }),
+            description: failures.slice(0, 5).join('\n'),
+            variant: 'destructive',
+          });
+          return;
+        }
       }
       await Promise.all([loadTestCases(), loadSections()]);
       toast({ title: t('success'), description: t('copiedSuccessfully') });
@@ -4359,6 +4409,12 @@ export function TestCases() {
                 cut: t('cut'),
                 paste: t('paste'),
                 delete: t('delete'),
+                addStep: t('addStep'),
+                undo: t('undo'),
+                redo: t('redo'),
+                unsavedChanges: t('unsavedChanges'),
+                unsavedChangesDescription: t('mindmapUnsavedChangesDescription'),
+                discard: t('discard'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
@@ -4367,6 +4423,8 @@ export function TestCases() {
               onMoveSection={moveMindmapSection}
               onMoveCase={moveMindmapCase}
               onUpdateCase={updateMindmapCase}
+              onLoadCaseSteps={loadMindmapCaseSteps}
+              onUpdateCaseSteps={updateMindmapCaseSteps}
               onCopyNode={copyMindmapNode}
               onDeleteNode={deleteMindmapNode}
               onOpenCase={(testCaseId) => navigate(getTestCaseDetailUrl(testCaseId))}
