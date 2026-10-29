@@ -12,7 +12,7 @@ import type { TestCase } from '@/types';
 import type { Section } from '@/types/testCases';
 
 type SelectedNode = {
-  kind: 'suite' | 'section' | 'case' | 'field';
+  kind: 'suite' | 'section' | 'case' | 'field' | 'step';
   id: number;
   title: string;
   suiteId: number;
@@ -22,6 +22,8 @@ type SelectedNode = {
   caseSeq?: number | null;
   caseId?: number;
   fieldKey?: keyof CaseDraft;
+  stepIndex?: number;
+  stepPart?: 'action' | 'expected_result';
 };
 type ActionNode = Omit<SelectedNode, 'kind'> & { kind: 'suite' | 'section' | 'case' };
 
@@ -85,13 +87,16 @@ type Props = {
 const sectionNodeId = (id: string | number) => `section:${id}`;
 const caseNodeId = (id: number) => `case:${id}`;
 const fieldNodeId = (caseId: number, fieldKey: keyof CaseDraft) => `field:${caseId}:${fieldKey}`;
-const selectedCaseNodeId = (node: SelectedNode | null | undefined) => node?.kind === 'case' ? node.id : node?.kind === 'field' ? node.caseId : undefined;
+const stepNodeId = (caseId: number, stepIndex: number, stepPart: 'action' | 'expected_result') => `step:${caseId}:${stepIndex}:${stepPart}`;
+const selectedCaseNodeId = (node: SelectedNode | null | undefined) => node?.kind === 'case' ? node.id : (node?.kind === 'field' || node?.kind === 'step') ? node.caseId : undefined;
 const mindNodeId = (node: SelectedNode) => node.kind === 'suite'
   ? `suite:${node.id}`
   : node.kind === 'section'
     ? sectionNodeId(node.id)
     : node.kind === 'field' && node.caseId && node.fieldKey
       ? fieldNodeId(node.caseId, node.fieldKey)
+      : node.kind === 'step' && node.caseId && node.stepIndex !== undefined && node.stepPart
+        ? stepNodeId(node.caseId, node.stepIndex, node.stepPart)
       : caseNodeId(node.id);
 
 export function TestCaseMindmapView({
@@ -126,6 +131,7 @@ export function TestCaseMindmapView({
   const [sectionParentId, setSectionParentId] = useState<number | null>(null);
   const [caseDraft, setCaseDraft] = useState<CaseDraft>(emptyCaseDraft);
   const [stepDrafts, setStepDrafts] = useState<CaseStepDraft[]>([]);
+  const [stepsByCase, setStepsByCase] = useState<Record<number, CaseStepDraft[]>>({});
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [draftHistory, setDraftHistory] = useState<CaseDraft[]>([emptyCaseDraft]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -137,6 +143,7 @@ export function TestCaseMindmapView({
   const dirtyRef = useRef(false);
   const draftHistoryRef = useRef<CaseDraft[]>([emptyCaseDraft]);
   const historyIndexRef = useRef(0);
+  const stepsByCaseRef = useRef<Record<number, CaseStepDraft[]>>({});
   const structuralHistoryRef = useRef<HistoryCommand[]>([]);
   const structuralIndexRef = useRef(0);
   const [, setStructuralVersion] = useState(0);
@@ -145,13 +152,14 @@ export function TestCaseMindmapView({
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { draftHistoryRef.current = draftHistory; }, [draftHistory]);
   useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
+  useEffect(() => { stepsByCaseRef.current = stepsByCase; }, [stepsByCase]);
   useEffect(() => {
     structuralHistoryRef.current = [];
     structuralIndexRef.current = 0;
     setStructuralVersion((current) => current + 1);
   }, [suiteId]);
 
-  const selectedCaseId = selected?.kind === 'case' ? selected.id : selected?.kind === 'field' ? selected.caseId : undefined;
+  const selectedCaseId = selected?.kind === 'case' ? selected.id : (selected?.kind === 'field' || selected?.kind === 'step') ? selected.caseId : undefined;
   const selectedCase = selectedCaseId ? testCases.find((testCase) => testCase.id === selectedCaseId) : undefined;
 
   useEffect(() => {
@@ -169,6 +177,7 @@ export function TestCaseMindmapView({
       void onLoadCaseSteps(selectedCase.id).then((items) => {
         const normalized = items.map((item, index) => ({ ...item, step_number: index + 1, step_type: item.step_type || 'manual' }));
         setStepDrafts(normalized);
+        setStepsByCase((current) => ({ ...current, [selectedCase.id]: normalized }));
         setSavedSnapshot(JSON.stringify({ caseDraft: nextDraft, stepDrafts: normalized }));
       });
     } else {
@@ -297,6 +306,26 @@ export function TestCaseMindmapView({
       children: [],
     });
 
+    const makeStructuredStep = (testCase: TestCase, step: CaseStepDraft, index: number): NodeObj => ({
+      id: stepNodeId(testCase.id, index, 'action'),
+      topic: step.action || '—',
+      tags: [`${labels.steps} #${index + 1}`],
+      metadata: {
+        kind: 'step', id: testCase.id, caseId: testCase.id, stepIndex: index, stepPart: 'action',
+        title: `${labels.steps} #${index + 1}`, suiteId, sectionId: testCase.section_id,
+      },
+      children: [{
+        id: stepNodeId(testCase.id, index, 'expected_result'),
+        topic: step.expected_result || '—',
+        tags: [labels.expectedResult],
+        metadata: {
+          kind: 'step', id: testCase.id, caseId: testCase.id, stepIndex: index, stepPart: 'expected_result',
+          title: labels.expectedResult, suiteId, sectionId: testCase.section_id,
+        },
+        children: [],
+      }],
+    });
+
     const makeCase = (testCase: TestCase): NodeObj => ({
       id: caseNodeId(testCase.id),
       topic: testCase.title,
@@ -320,7 +349,7 @@ export function TestCaseMindmapView({
         ...(!testCase.is_multistep ? [
           makeField(testCase, 'steps', labels.steps, testCase.steps),
           makeField(testCase, 'expected_result', labels.expectedResult, testCase.expected_result),
-        ] : []),
+        ] : (stepsByCase[testCase.id] || []).map((step, index) => makeStructuredStep(testCase, step, index))),
       ],
     });
 
@@ -355,11 +384,11 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, suiteId, suiteName, testCases]);
+  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, testCases]);
 
   const dataSignature = useMemo(
-    () => JSON.stringify([suiteId, sections, testCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
-    [sections, suiteId, testCases],
+    () => JSON.stringify([suiteId, sections, stepsByCase, testCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
+    [sections, stepsByCase, suiteId, testCases],
   );
 
   useEffect(() => {
@@ -437,6 +466,14 @@ export function TestCaseMindmapView({
           else if (metadata.caseId && metadata.fieldKey) {
             const value = operation.obj.topic === '—' ? '' : operation.obj.topic;
             await onUpdateCase(metadata.caseId, { [metadata.fieldKey]: value });
+          } else if (metadata.kind === 'step' && metadata.caseId && metadata.stepIndex !== undefined && metadata.stepPart) {
+            const currentSteps = stepsByCaseRef.current[metadata.caseId] || [];
+            const nextSteps = currentSteps.map((step, index) => index === metadata.stepIndex
+              ? { ...step, [metadata.stepPart!]: operation.obj.topic === '—' ? '' : operation.obj.topic }
+              : step);
+            await onUpdateCaseSteps(metadata.caseId, nextSteps);
+            setStepsByCase((current) => ({ ...current, [metadata.caseId!]: nextSteps }));
+            if (selectedCaseNodeId(selectedRef.current) === metadata.caseId) setStepDrafts(nextSteps);
           }
         } catch {
           mind.refresh(structuredClone(data));
@@ -451,7 +488,7 @@ export function TestCaseMindmapView({
         for (const node of operation.objs) {
           const metadata = node.metadata as SelectedNode | undefined;
           const parent = node.parent?.metadata as SelectedNode | undefined;
-          if (!metadata || !parent || metadata.kind === 'field' || parent.kind === 'case' || parent.kind === 'field') throw new Error(labels.syncFailed);
+          if (!metadata || !parent || metadata.kind === 'field' || metadata.kind === 'step' || parent.kind === 'case' || parent.kind === 'field' || parent.kind === 'step') throw new Error(labels.syncFailed);
           const parentSectionId = parent.kind === 'section' ? parent.id : null;
           const previousSectionId = metadata.parentSectionId ?? null;
           if (metadata.kind === 'section') {
@@ -528,6 +565,14 @@ export function TestCaseMindmapView({
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind === 'field' && metadata.caseId && metadata.fieldKey) {
         event.preventDefault();
         void onUpdateCase(metadata.caseId, { [metadata.fieldKey]: '' });
+      } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind === 'step' && metadata.caseId && metadata.stepIndex !== undefined && metadata.stepPart) {
+        event.preventDefault();
+        const currentSteps = stepsByCaseRef.current[metadata.caseId] || [];
+        const nextSteps = currentSteps.map((step, index) => index === metadata.stepIndex ? { ...step, [metadata.stepPart!]: '' } : step);
+        void onUpdateCaseSteps(metadata.caseId, nextSteps).then(() => {
+          setStepsByCase((current) => ({ ...current, [metadata.caseId!]: nextSteps }));
+          setStepDrafts(nextSteps);
+        });
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind !== 'suite') {
         event.preventDefault();
         void onDeleteNode(metadata as ActionNode);
@@ -584,7 +629,10 @@ export function TestCaseMindmapView({
     setSaving(true);
     try {
       await onUpdateCase(selectedCase.id, caseDraft);
-      if (selectedCase.is_multistep) await onUpdateCaseSteps(selectedCase.id, stepDrafts);
+      if (selectedCase.is_multistep) {
+        await onUpdateCaseSteps(selectedCase.id, stepDrafts);
+        setStepsByCase((current) => ({ ...current, [selectedCase.id]: stepDrafts }));
+      }
       setSavedSnapshot(JSON.stringify({ caseDraft, stepDrafts }));
     } finally {
       setSaving(false);
@@ -651,7 +699,7 @@ export function TestCaseMindmapView({
               {selected.caseSeq && <p className="mt-1 text-sm text-muted-foreground">TC-{selected.caseSeq}</p>}
               {selected.priority && <p className="mt-1 text-sm capitalize text-muted-foreground">{selected.priority}</p>}
             </div>
-            {(selected.kind === 'case' || selected.kind === 'field') && selectedCase && <Button className="w-full" onClick={() => onOpenCase(selectedCase.id)}><FileText className="mr-2 h-4 w-4" />{labels.edit}</Button>}
+            {(selected.kind === 'case' || selected.kind === 'field' || selected.kind === 'step') && selectedCase && <Button className="w-full" onClick={() => onOpenCase(selectedCase.id)}><FileText className="mr-2 h-4 w-4" />{labels.edit}</Button>}
             {selectedCase && (
               <div className="space-y-3 border-t pt-4">
                 <div className="space-y-1.5">
