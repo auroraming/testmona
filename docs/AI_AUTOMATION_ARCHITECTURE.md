@@ -65,3 +65,14 @@ other server tools, arguments are checked against the discovered JSON Schema
 before transport, and ping/call timeouts and protocol failures become stable,
 structured errors. This client is an internal execution dependency and is
 separate from TestMona's user-facing remote `/mcp` server.
+
+## Agent Runtime contract
+
+`AutomationAgentRuntime` asks the configured AI Manager for one JSON decision at
+a time, then invokes only tools exposed by the restricted MCP client. It checks
+cancellation before each decision, caps steps, wall-clock time, and total token
+usage, and returns stable error codes for malformed model output, MCP failures,
+timeouts, and exhausted budgets. A tool call is recorded as an observation; it
+does not itself make the task pass, and the prompt requires explicit assertion
+results before a successful summary. Persistence into the task/evidence models
+and production Runner wiring are the next integration boundary.
