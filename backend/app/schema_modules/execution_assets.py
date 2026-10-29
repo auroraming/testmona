@@ -4,6 +4,7 @@ from datetime import datetime
 from ..models import Priority, Status, TestStatus, ResultStatus, Role, Permission, CustomFieldType, TestType, RecycleBinType, RequirementStatus, DefectStatus, DefectSeverity, DefectPriority, DefectLinkType, MilestoneStatus, NotificationType, StepCategory, StepComplexity, DocStatus
 import re
 import html
+import json
 
 from .versioning import (
     DateValidationRules,
@@ -34,6 +35,8 @@ from .notifications_analytics import *
 TEST_DEBT_TYPES = {"stale", "duplicate", "orphan", "always_pass", "never_run", "no_requirement_link"}
 TEST_DEBT_SEVERITIES = {"low", "medium", "high", "critical"}
 TEST_DEBT_ACTIONS = {"update", "merge", "archive", "link_req", "review"}
+AI_AUTOMATION_RUNNER_TYPES = {"web", "mobile", "api"}
+AI_AUTOMATION_EXECUTION_MODES = {"ai", "script"}
 
 
 class TestDebtItemBase(BaseModel):
@@ -812,3 +815,172 @@ class WebhookDeliveryView(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AIAutomationTaskCreate(BaseModel):
+    project_id: int = Field(..., ge=1)
+    runner_type: str = Field(..., min_length=1, max_length=20)
+    execution_mode: str = Field("ai", min_length=1, max_length=20)
+    goal: str = Field(..., min_length=1, max_length=4000)
+    test_case_id: Optional[int] = Field(None, ge=1)
+    test_run_id: Optional[int] = Field(None, ge=1)
+    environment_id: Optional[int] = Field(None, ge=1)
+    max_steps: int = Field(50, ge=1, le=500)
+    timeout_seconds: int = Field(900, ge=30, le=86400)
+    token_budget: Optional[int] = Field(None, ge=1, le=10_000_000)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("runner_type")
+    @classmethod
+    def validate_runner_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_RUNNER_TYPES:
+            raise ValueError("runner_type must be web, mobile, or api")
+        return normalized
+
+    @field_validator("execution_mode")
+    @classmethod
+    def validate_execution_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_EXECUTION_MODES:
+            raise ValueError("execution_mode must be ai or script")
+        return normalized
+
+    @field_validator("goal")
+    @classmethod
+    def normalize_goal(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("goal cannot be empty")
+        return normalized
+
+    @field_validator("config")
+    @classmethod
+    def reject_inline_secrets(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        forbidden = {"apikey", "authorization", "password", "secret", "token", "accesstoken"}
+
+        def walk(item: Any) -> bool:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                    if normalized_key in forbidden or normalized_key.endswith(tuple(forbidden)):
+                        return True
+                    if walk(child):
+                        return True
+                return False
+            if isinstance(item, list):
+                return any(walk(child) for child in item)
+            return False
+
+        if walk(value):
+            raise ValueError("config must use credential references and cannot contain inline secrets")
+        if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
+            raise ValueError("config cannot exceed 64 KB")
+        return value
+
+
+class AIAutomationTask(BaseModel):
+    id: int
+    project_id: int
+    test_case_id: Optional[int] = None
+    test_run_id: Optional[int] = None
+    environment_id: Optional[int] = None
+    requested_by: int
+    runner_type: str
+    execution_mode: str
+    status: str
+    goal: str
+    max_steps: int
+    timeout_seconds: int
+    token_budget: Optional[int] = None
+    input_tokens: int
+    output_tokens: int
+    runner_id: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    attempt_count: int
+    config: Dict[str, Any]
+    result: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    cancel_requested_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationRunnerCreate(BaseModel):
+    project_id: int = Field(..., ge=1)
+    name: str = Field(..., min_length=1, max_length=120)
+    runner_type: str = Field(..., min_length=1, max_length=20)
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name cannot be empty")
+        return normalized
+
+    @field_validator("runner_type")
+    @classmethod
+    def validate_runner_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_RUNNER_TYPES:
+            raise ValueError("runner_type must be web, mobile, or api")
+        return normalized
+
+
+class AIAutomationRunner(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    runner_type: str
+    token_prefix: str
+    capabilities: Dict[str, Any]
+    status: str
+    last_seen_at: Optional[datetime] = None
+    created_by: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationRunnerCreated(AIAutomationRunner):
+    token: str
+
+
+class AIAutomationTaskLease(BaseModel):
+    task: AIAutomationTask
+    lease_token: str
+
+
+class AIAutomationRunnerHeartbeat(BaseModel):
+    task_id: Optional[int] = Field(None, ge=1)
+    lease_token: Optional[str] = Field(None, min_length=20, max_length=200)
+
+
+class AIAutomationRunnerHeartbeatResult(BaseModel):
+    runner_status: str
+    cancel_requested: bool = False
+    lease_expires_at: Optional[datetime] = None
+
+
+class AIAutomationTaskReport(BaseModel):
+    lease_token: str = Field(..., min_length=20, max_length=200)
+    status: str = Field(..., min_length=1, max_length=30)
+    result: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = Field(None, max_length=4000)
+    input_tokens: int = Field(0, ge=0)
+    output_tokens: int = Field(0, ge=0)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"passed", "failed", "blocked", "timed_out", "cancelled"}:
+            raise ValueError("status must be a terminal task status")
+        return normalized

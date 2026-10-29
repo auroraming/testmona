@@ -505,3 +505,79 @@ class DefectTemplate(Base):
     # Relationships
     project = relationship("Project")
     creator = relationship("User")
+
+
+class AIAutomationTask(Base):
+    """Project-scoped orchestration record for Web, Mobile, and API AI runs.
+
+    The record deliberately stores orchestration state rather than provider
+    credentials or runner secrets. Workers receive short-lived references at
+    dispatch time; no secret value belongs in ``config`` or ``result``.
+    """
+
+    __tablename__ = "ai_automation_tasks"
+    __table_args__ = (
+        Index("ix_ai_automation_tasks_project_status", "project_id", "status"),
+        Index("ix_ai_automation_tasks_project_created", "project_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    test_case_id = Column(Integer, ForeignKey("test_cases.id", ondelete="SET NULL"), nullable=True, index=True)
+    test_run_id = Column(Integer, ForeignKey("test_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    environment_id = Column(Integer, ForeignKey("execution_environments.id", ondelete="SET NULL"), nullable=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    runner_type = Column(String(20), nullable=False)  # web | mobile | api
+    execution_mode = Column(String(20), nullable=False, default="ai")  # ai | script
+    status = Column(String(30), nullable=False, default="queued", index=True)
+    goal = Column(Text, nullable=False)
+    max_steps = Column(Integer, nullable=False, default=50)
+    timeout_seconds = Column(Integer, nullable=False, default=900)
+    token_budget = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    runner_id = Column(Integer, ForeignKey("ai_automation_runners.id", ondelete="SET NULL"), nullable=True, index=True)
+    lease_token_hash = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    config = Column(JSON, nullable=False, default=dict)
+    result = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    project = relationship("Project")
+    test_case = relationship("TestCase")
+    test_run = relationship("TestRun")
+    environment = relationship("ExecutionEnvironment")
+    requester = relationship("User", foreign_keys=[requested_by])
+    runner = relationship("AIAutomationRunner")
+
+
+class AIAutomationRunner(Base):
+    """Project-scoped worker identity with a hashed, one-time-issued token."""
+
+    __tablename__ = "ai_automation_runners"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_ai_automation_runner_project_name"),
+        Index("ix_ai_automation_runners_project_type", "project_id", "runner_type"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    runner_type = Column(String(20), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_prefix = Column(String(12), nullable=False)
+    capabilities = Column(JSON, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default="offline")
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    project = relationship("Project")
+    creator = relationship("User", foreign_keys=[created_by])
