@@ -122,7 +122,6 @@ export function TestCaseMindmapView({
   onDeleteNode,
   onOpenCase,
 }: Props) {
-  const workbenchRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<MindElixirInstance | null>(null);
@@ -142,7 +141,6 @@ export function TestCaseMindmapView({
   const [pendingSelection, setPendingSelection] = useState<SelectedNode | null>(null);
   const [guardOpen, setGuardOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [visibleCaseLimit, setVisibleCaseLimit] = useState(CASE_BATCH_SIZE);
   const [clipboard, setClipboard] = useState<{ mode: 'copy' | 'cut'; node: ActionNode } | null>(null);
   const clipboardRef = useRef<typeof clipboard>(null);
@@ -166,11 +164,6 @@ export function TestCaseMindmapView({
     setStructuralVersion((current) => current + 1);
   }, [suiteId]);
   useEffect(() => { setVisibleCaseLimit(CASE_BATCH_SIZE); }, [suiteId, testCases]);
-  useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === workbenchRef.current);
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
   useEffect(() => { viewportRef.current = null; }, [suiteId]);
 
   const selectedCaseId = selected?.kind === 'case' ? selected.id : (selected?.kind === 'field' || selected?.kind === 'step') ? selected.caseId : undefined;
@@ -431,10 +424,6 @@ export function TestCaseMindmapView({
     if (initialized instanceof Error) throw initialized;
     instanceRef.current = mind;
     const previousViewport = viewportRef.current;
-    if (previousViewport) {
-      mind.scaleVal = previousViewport.scale;
-      mind.map.style.transform = previousViewport.transform;
-    }
 
     const select = (nodes: NodeObj[]) => {
       const metadata = nodes[nodes.length - 1]?.metadata as SelectedNode | undefined;
@@ -603,15 +592,24 @@ export function TestCaseMindmapView({
     mind.bus.addListener('operation', syncOperation);
     canvasRef.current.addEventListener('dblclick', openSelected);
     mind.container.addEventListener('keydown', handleKeys);
-    queueMicrotask(() => {
-      if (!previousViewport) mind.scaleFit();
-      const current = selectedRef.current;
-      if (!current) return;
-      const element = mind.findEle(mindNodeId(current));
-      if (element) mind.selectNode(element);
+    const restoreFrame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (instanceRef.current !== mind) return;
+        if (previousViewport) {
+          mind.scaleVal = previousViewport.scale;
+          mind.map.style.transform = previousViewport.transform;
+        } else {
+          mind.scaleFit();
+        }
+        const current = selectedRef.current;
+        if (!current) return;
+        const element = mind.findEle(mindNodeId(current));
+        if (element) mind.selectNode(element);
+      });
     });
 
     return () => {
+      cancelAnimationFrame(restoreFrame);
       viewportRef.current = {
         transform: mind.map.style.transform,
         scale: mind.scaleVal,
@@ -707,26 +705,24 @@ export function TestCaseMindmapView({
   };
 
   return (
-    <div ref={workbenchRef} className={isFullscreen ? 'relative grid h-screen grid-cols-1 gap-0 bg-background' : 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]'}>
-      <div ref={hostRef} className={isFullscreen ? 'relative h-screen min-h-0 overflow-hidden bg-background' : 'relative h-[calc(100vh-18rem)] min-h-[420px] overflow-hidden rounded-lg border bg-background sm:min-h-[560px]'}>
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+      <div ref={hostRef} className="relative h-[calc(100vh-18rem)] min-h-[420px] overflow-hidden rounded-lg border bg-background sm:min-h-[560px]">
         <div ref={canvasRef} className="h-full w-full" />
         {syncing && <div className="absolute bottom-3 left-3 z-20 rounded-md border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">{labels.syncing}</div>}
         <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1 rounded-lg border bg-background/95 p-1 shadow-sm">
           <Button size="icon" variant="ghost" title={labels.undo} onClick={() => void undo()} disabled={historyIndex <= 0 && structuralIndexRef.current <= 0}><Undo2 className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.redo} onClick={() => void redo()} disabled={historyIndex >= draftHistory.length - 1 && structuralIndexRef.current >= structuralHistoryRef.current.length}><Redo2 className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fit} onClick={() => instanceRef.current?.scaleFit()}><Expand className="h-4 w-4" /></Button>
-          <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void workbenchRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
           {canWrite && <Button size="sm" variant="ghost" onClick={() => onCreateCase(selected?.kind === 'section' ? selected.id : null)}><Plus className="mr-1 h-4 w-4" />{labels.addCase}</Button>}
           {visibleCaseLimit < testCases.length && <Button size="sm" variant="ghost" onClick={() => setVisibleCaseLimit((current) => Math.min(current + CASE_BATCH_SIZE, testCases.length))}>{labels.loadMore} ({Math.min(visibleCaseLimit, testCases.length)}/{testCases.length})</Button>}
         </div>
       </div>
 
-      {selected && detailOpen && !isFullscreen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => setDetailOpen(false)} />}
-      <aside className={isFullscreen
-        ? `${detailOpen ? 'fixed' : 'hidden'} left-1/2 top-20 z-50 max-h-[calc(100vh-7rem)] w-[min(92vw,460px)] -translate-x-1/2 overflow-y-auto rounded-xl border bg-card/95 p-4 shadow-2xl backdrop-blur`
-        : `${detailOpen ? 'fixed' : 'hidden'} inset-y-4 right-4 z-50 w-[min(90vw,360px)] overflow-y-auto rounded-lg border bg-card p-4 shadow-xl xl:static xl:z-auto xl:block xl:w-auto xl:max-h-[calc(100vh-18rem)] xl:shadow-none`}>
-        <div className={`mb-2 justify-end ${isFullscreen ? 'flex' : 'flex xl:hidden'}`}>
+      {selected && detailOpen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => setDetailOpen(false)} />}
+      <aside className={`${detailOpen ? 'fixed' : 'hidden'} inset-y-4 right-4 z-50 w-[min(90vw,360px)] overflow-y-auto rounded-lg border bg-card p-4 shadow-xl xl:static xl:z-auto xl:block xl:w-auto xl:max-h-[calc(100vh-18rem)] xl:shadow-none`}>
+        <div className="mb-2 flex justify-end xl:hidden">
           <Button type="button" size="icon" variant="ghost" title={labels.cancel} onClick={() => setDetailOpen(false)}><X className="h-4 w-4" /></Button>
         </div>
         {selected ? (
