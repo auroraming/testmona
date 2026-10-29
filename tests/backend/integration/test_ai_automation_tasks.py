@@ -130,6 +130,7 @@ def test_runner_claim_heartbeat_report_and_idempotency(client):
     assert lease["task"]["runner_id"] == runner["id"]
     assert lease["task"]["status"] == "running"
     assert lease["task"]["attempt_count"] == 1
+    assert lease["context"] == {"goal": "Verify home page", "config": {}}
 
     heartbeat = client.post("/internal/ai-automation/heartbeat", headers=headers, json={
         "task_id": created["id"],
@@ -166,6 +167,60 @@ def test_runner_claim_heartbeat_report_and_idempotency(client):
     empty = client.post("/internal/ai-automation/claim", headers=headers)
     assert empty.status_code == 204
 
+
+def test_runner_claim_includes_safe_test_case_and_environment_context(client):
+    from app import models
+
+    with client.SessionLocal() as db:
+        suite = models.TestSuite(name="Checkout", project_id=client.project_id)
+        db.add(suite)
+        db.flush()
+        case = models.TestCase(
+            title="Submit order", test_suite_id=suite.id, project_id=client.project_id,
+            description="Checkout flow", preconditions="Cart has one item", priority="high",
+        )
+        db.add(case)
+        db.flush()
+        db.add(models.TestCaseStep(
+            test_case_id=case.id, step_number=1, order_index=0, action="Click submit",
+            expected_result="Confirmation is visible", data={"password": "must-not-leak"},
+        ))
+        environment = models.ExecutionEnvironment(
+            name="Staging", project_id=client.project_id, environment_type="staging",
+            config_data={
+                "base_url": "https://staging.example.test",
+                "api_key": "must-not-leak",
+                "headers": {"Authorization": "must-not-leak"},
+            },
+        )
+        db.add(environment)
+        db.commit()
+        case_id, environment_id = case.id, environment.id
+
+    _, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Run checkout",
+        "test_case_id": case_id,
+        "environment_id": environment_id,
+    })
+    assert task.status_code == 201, task.text
+    lease = client.post(
+        "/internal/ai-automation/claim", headers={"X-Runner-Token": token}
+    ).json()
+
+    assert lease["context"]["test_case"]["title"] == "Submit order"
+    assert lease["context"]["test_case"]["structured_steps"] == [{
+        "step_number": 1,
+        "action": "Click submit",
+        "expected_result": "Confirmation is visible",
+        "step_type": "manual",
+    }]
+    assert lease["context"]["environment"]["config"] == {
+        "base_url": "https://staging.example.test"
+    }
+    assert "must-not-leak" not in str(lease["context"])
 
 def test_running_task_receives_cancel_signal(client):
     _, token = _register_runner(client, "api")

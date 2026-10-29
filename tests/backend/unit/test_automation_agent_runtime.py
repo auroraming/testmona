@@ -41,18 +41,24 @@ def completion_sequence(*contents, tokens=10):
 @pytest.mark.asyncio
 async def test_runtime_calls_allowed_tool_then_finishes():
     mcp = FakeMCP()
+    observed = []
+
+    async def capture(step):
+        observed.append(step)
+
     runtime = AutomationAgentRuntime(
         SimpleNamespace(), mcp, project_id=1, user_id=2, max_steps=3, timeout_seconds=30,
         token_budget=100, completion=completion_sequence(
             '{"type":"tool","tool":"browser_click","arguments":{"selector":"#go"}}',
             '{"type":"finish","summary":"Assertion completed"}',
-        ),
+        ), step_callback=capture,
     )
     result = await runtime.run("Open the page")
     assert result.status == "completed"
     assert result.summary == "Assertion completed"
     assert result.input_tokens == 20
     assert mcp.calls == [("browser_click", {"selector": "#go"})]
+    assert [(step.sequence, step.tool) for step in observed] == [(1, "browser_click")]
 
 
 @pytest.mark.asyncio

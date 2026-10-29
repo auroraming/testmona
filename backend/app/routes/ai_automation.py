@@ -20,6 +20,10 @@ from ..database import get_db
 TERMINAL_STATUSES = {"cancelled", "passed", "failed", "blocked", "timed_out"}
 LEASE_SECONDS = 90
 logger = logging.getLogger(__name__)
+SAFE_ENVIRONMENT_CONFIG_KEYS = {
+    "base_url", "app_url", "api_url", "package_name", "bundle_id",
+    "device_name", "platform", "browser", "locale",
+}
 
 
 def _audit_task_action(
@@ -100,6 +104,45 @@ def _get_runner(db: Session, runner_id: int) -> models.AIAutomationRunner:
     if runner is None:
         raise HTTPException(status_code=404, detail="AI automation runner not found")
     return runner
+
+
+def _build_runner_context(task: models.AIAutomationTask) -> dict:
+    """Build a secret-minimized snapshot that a leased Runner may consume."""
+    context: dict = {"goal": task.goal, "config": task.config or {}}
+    if task.test_case is not None:
+        context["test_case"] = {
+            "id": task.test_case.id,
+            "title": task.test_case.title,
+            "description": task.test_case.description,
+            "preconditions": task.test_case.preconditions,
+            "steps": task.test_case.steps,
+            "expected_result": task.test_case.expected_result,
+            "priority": task.test_case.priority,
+            "structured_steps": [
+                {
+                    "step_number": step.step_number,
+                    "action": step.action,
+                    "expected_result": step.expected_result,
+                    "step_type": step.step_type,
+                }
+                for step in sorted(
+                    task.test_case.test_steps,
+                    key=lambda item: (item.order_index or 0, item.step_number),
+                )
+            ],
+        }
+    if task.environment is not None:
+        raw_config = task.environment.config_data if isinstance(task.environment.config_data, dict) else {}
+        context["environment"] = {
+            "id": task.environment.id,
+            "name": task.environment.name,
+            "environment_type": task.environment.environment_type,
+            "config": {
+                key: value for key, value in raw_config.items()
+                if key.lower() in SAFE_ENVIRONMENT_CONFIG_KEYS and isinstance(value, (str, int, float, bool))
+            },
+        }
+    return context
 
 
 def register_ai_automation_routes(app) -> None:
@@ -329,7 +372,7 @@ def register_ai_automation_routes(app) -> None:
         task.started_at = task.started_at or now
         db.commit()
         db.refresh(task)
-        return {"task": task, "lease_token": lease_token}
+        return {"task": task, "lease_token": lease_token, "context": _build_runner_context(task)}
 
     @app.post("/internal/ai-automation/heartbeat", response_model=schemas.AIAutomationRunnerHeartbeatResult)
     def heartbeat_ai_automation_runner(

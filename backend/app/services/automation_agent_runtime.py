@@ -63,6 +63,7 @@ class AgentRuntimeResult:
 
 CompletionFunction = Callable[..., Awaitable[AICompletionResult]]
 CancellationCheck = Callable[[], Awaitable[bool]]
+StepCallback = Callable[[AgentStep], Awaitable[None]]
 
 
 class AutomationAgentRuntime:
@@ -80,6 +81,7 @@ class AutomationAgentRuntime:
         token_budget: int | None = None,
         completion: CompletionFunction = generate_ai_completion,
         cancellation_check: CancellationCheck | None = None,
+        step_callback: StepCallback | None = None,
     ) -> None:
         self.db = db
         self.mcp_client = mcp_client
@@ -90,6 +92,7 @@ class AutomationAgentRuntime:
         self.token_budget = token_budget
         self.completion = completion
         self.cancellation_check = cancellation_check
+        self.step_callback = step_callback
 
     @staticmethod
     def _tool_catalog(tools: list[AutomationMCPTool]) -> list[dict[str, Any]]:
@@ -191,8 +194,12 @@ class AutomationAgentRuntime:
                     step.error = exc.as_dict()
                     if not exc.retryable:
                         steps.append(step)
+                        if self.step_callback:
+                            await self.step_callback(step)
                         raise AgentRuntimeError(exc.code, exc.message, retryable=False) from exc
                 steps.append(step)
+                if self.step_callback:
+                    await self.step_callback(step)
 
             raise AgentRuntimeError("max_steps_exceeded", "Agent Runtime reached the maximum number of steps")
         except asyncio.TimeoutError as exc:

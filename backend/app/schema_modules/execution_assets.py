@@ -956,6 +956,7 @@ class AIAutomationRunnerCreated(AIAutomationRunner):
 class AIAutomationTaskLease(BaseModel):
     task: AIAutomationTask
     lease_token: str
+    context: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AIAutomationRunnerHeartbeat(BaseModel):

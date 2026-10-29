@@ -75,4 +75,10 @@ usage, and returns stable error codes for malformed model output, MCP failures,
 timeouts, and exhausted budgets. A tool call is recorded as an observation; it
 does not itself make the task pass, and the prompt requires explicit assertion
 results before a successful summary. Persistence into the task/evidence models
-and production Runner wiring are the next integration boundary.
+is connected through a small asynchronous Runner protocol client. A claimed
+lease includes a snapshot of the linked test case, structured steps, and an
+allowlisted subset of environment metadata; arbitrary environment credentials
+and step data are excluded. The SDK maintains heartbeats, appends immutable
+step observations through the Runtime callback, and reports terminal status and
+token totals idempotently. Production Web/Mobile/API tool implementations remain
+the next deployment boundary.
