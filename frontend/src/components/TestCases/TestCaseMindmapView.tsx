@@ -27,6 +27,7 @@ type ActionNode = Omit<SelectedNode, 'kind'> & { kind: 'suite' | 'section' | 'ca
 
 type CaseDraft = Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result'>;
 type CaseStepDraft = { step_number: number; action: string; expected_result: string; step_type: string };
+type HistoryCommand = { undo: () => Promise<void>; redo: () => Promise<void> };
 
 const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '', expected_result: '' };
 
@@ -136,11 +137,19 @@ export function TestCaseMindmapView({
   const dirtyRef = useRef(false);
   const draftHistoryRef = useRef<CaseDraft[]>([emptyCaseDraft]);
   const historyIndexRef = useRef(0);
+  const structuralHistoryRef = useRef<HistoryCommand[]>([]);
+  const structuralIndexRef = useRef(0);
+  const [, setStructuralVersion] = useState(0);
 
   useEffect(() => { clipboardRef.current = clipboard; }, [clipboard]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { draftHistoryRef.current = draftHistory; }, [draftHistory]);
   useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
+  useEffect(() => {
+    structuralHistoryRef.current = [];
+    structuralIndexRef.current = 0;
+    setStructuralVersion((current) => current + 1);
+  }, [suiteId]);
 
   const selectedCaseId = selected?.kind === 'case' ? selected.id : selected?.kind === 'field' ? selected.caseId : undefined;
   const selectedCase = selectedCaseId ? testCases.find((testCase) => testCase.id === selectedCaseId) : undefined;
@@ -206,6 +215,45 @@ export function TestCaseMindmapView({
     setHistoryIndex(nextIndex);
     historyIndexRef.current = nextIndex;
     setCaseDraft(draftHistoryRef.current[nextIndex]);
+  };
+
+  const pushStructuralHistory = (command: HistoryCommand) => {
+    structuralHistoryRef.current = [...structuralHistoryRef.current.slice(0, structuralIndexRef.current), command];
+    structuralIndexRef.current = structuralHistoryRef.current.length;
+    setStructuralVersion((current) => current + 1);
+  };
+
+  const undo = async () => {
+    if (historyIndexRef.current > 0) {
+      undoDraft();
+      return;
+    }
+    if (structuralIndexRef.current <= 0) return;
+    setSyncing(true);
+    try {
+      const nextIndex = structuralIndexRef.current - 1;
+      await structuralHistoryRef.current[nextIndex].undo();
+      structuralIndexRef.current = nextIndex;
+      setStructuralVersion((current) => current + 1);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const redo = async () => {
+    if (historyIndexRef.current < draftHistoryRef.current.length - 1) {
+      redoDraft();
+      return;
+    }
+    if (structuralIndexRef.current >= structuralHistoryRef.current.length) return;
+    setSyncing(true);
+    try {
+      await structuralHistoryRef.current[structuralIndexRef.current].redo();
+      structuralIndexRef.current += 1;
+      setStructuralVersion((current) => current + 1);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const targetSectionId = (node: SelectedNode | null) => node?.kind === 'section' ? node.id : node?.sectionId ?? null;
@@ -373,8 +421,19 @@ export function TestCaseMindmapView({
         }
         setSyncing(true);
         try {
-          if (metadata.kind === 'section') await onRenameSection(metadata.id, operation.obj.topic);
-          else if (metadata.kind === 'case') await onRenameCase(metadata.id, operation.obj.topic);
+          if (metadata.kind === 'section') {
+            await onRenameSection(metadata.id, operation.obj.topic);
+            pushStructuralHistory({
+              undo: () => onRenameSection(metadata.id, metadata.title),
+              redo: () => onRenameSection(metadata.id, operation.obj.topic),
+            });
+          } else if (metadata.kind === 'case') {
+            await onRenameCase(metadata.id, operation.obj.topic);
+            pushStructuralHistory({
+              undo: () => onRenameCase(metadata.id, metadata.title),
+              redo: () => onRenameCase(metadata.id, operation.obj.topic),
+            });
+          }
           else if (metadata.caseId && metadata.fieldKey) {
             const value = operation.obj.topic === '—' ? '' : operation.obj.topic;
             await onUpdateCase(metadata.caseId, { [metadata.fieldKey]: value });
@@ -394,8 +453,21 @@ export function TestCaseMindmapView({
           const parent = node.parent?.metadata as SelectedNode | undefined;
           if (!metadata || !parent || metadata.kind === 'field' || parent.kind === 'case' || parent.kind === 'field') throw new Error(labels.syncFailed);
           const parentSectionId = parent.kind === 'section' ? parent.id : null;
-          if (metadata.kind === 'section') await onMoveSection(metadata.id, parentSectionId);
-          if (metadata.kind === 'case') await onMoveCase(metadata.id, parentSectionId);
+          const previousSectionId = metadata.parentSectionId ?? null;
+          if (metadata.kind === 'section') {
+            await onMoveSection(metadata.id, parentSectionId);
+            pushStructuralHistory({
+              undo: () => onMoveSection(metadata.id, previousSectionId),
+              redo: () => onMoveSection(metadata.id, parentSectionId),
+            });
+          }
+          if (metadata.kind === 'case') {
+            await onMoveCase(metadata.id, parentSectionId);
+            pushStructuralHistory({
+              undo: () => onMoveCase(metadata.id, previousSectionId),
+              redo: () => onMoveCase(metadata.id, parentSectionId),
+            });
+          }
         }
       } catch {
         mind.refresh(structuredClone(data));
@@ -426,8 +498,8 @@ export function TestCaseMindmapView({
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        if (event.shiftKey) redoDraft();
-        else undoDraft();
+        if (event.shiftKey) void redo();
+        else void undo();
         return;
       }
       if (event.metaKey || event.ctrlKey) return;
@@ -561,8 +633,8 @@ export function TestCaseMindmapView({
         <div ref={canvasRef} className="h-full w-full" />
         {syncing && <div className="absolute bottom-3 left-3 z-20 rounded-md border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">{labels.syncing}</div>}
         <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1 rounded-lg border bg-background/95 p-1 shadow-sm">
-          <Button size="icon" variant="ghost" title={labels.undo} onClick={undoDraft} disabled={historyIndex <= 0}><Undo2 className="h-4 w-4" /></Button>
-          <Button size="icon" variant="ghost" title={labels.redo} onClick={redoDraft} disabled={historyIndex >= draftHistory.length - 1}><Redo2 className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" title={labels.undo} onClick={() => void undo()} disabled={historyIndex <= 0 && structuralIndexRef.current <= 0}><Undo2 className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" title={labels.redo} onClick={() => void redo()} disabled={historyIndex >= draftHistory.length - 1 && structuralIndexRef.current >= structuralHistoryRef.current.length}><Redo2 className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fit} onClick={() => instanceRef.current?.scaleFit()}><Expand className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
