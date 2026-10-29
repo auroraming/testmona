@@ -59,10 +59,12 @@ export function TestCaseSearchBar({
   const [activeIndex, setActiveIndex] = useState(0);
   const listboxId = useId();
 
-  // Global "/" shortcut to jump straight into search (skips when already typing).
+  // Global "/" and Ctrl/Cmd+F shortcuts jump into the workbench search.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !isTypingTarget(event.target)) {
+      const slashShortcut = event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey;
+      const findShortcut = event.key.toLowerCase() === 'f' && (event.metaKey || event.ctrlKey) && !event.altKey;
+      if ((slashShortcut || findShortcut) && !isTypingTarget(event.target)) {
         event.preventDefault();
         inputRef.current?.focus();
         setOpen(true);
