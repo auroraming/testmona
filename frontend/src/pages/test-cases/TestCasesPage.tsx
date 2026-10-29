@@ -5261,6 +5261,8 @@ export function TestCases() {
           projectId={currentProjectId}
           testSuiteId={currentTestSuiteId}
           sectionId={urlSectionId && Number(urlSectionId) > 0 ? Number(urlSectionId) : undefined}
+          testSuites={testSuites}
+          sections={mockSections}
           onImported={async () => {
             await loadTestCases();
             await loadSections();

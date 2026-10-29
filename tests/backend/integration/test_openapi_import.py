@@ -14,6 +14,15 @@ def _suite(client, project_id: int, name: str = "API") -> int:
     return response.json()["id"]
 
 
+def _section(client, suite_id: int, name: str = "Imported API") -> int:
+    response = client.post(
+        "/test-case-sections",
+        json={"name": name, "test_suite_id": suite_id},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["id"]
+
+
 def _document() -> dict:
     return {
         "openapi": "3.0.3",
@@ -122,3 +131,92 @@ def test_commit_rejects_suite_from_another_project(client):
         "drafts": [draft],
     })
     assert response.status_code == 400
+
+
+def test_commit_targets_section_and_copy_mode_creates_a_distinct_case(client):
+    suite_id = _suite(client, client.project_id)
+    section_id = _section(client, suite_id)
+    draft = {
+        "operation_key": "get:/health:success",
+        "title": "Health — success",
+        "reference": "GET /health",
+        "steps": [{"step_number": 1, "action": "Call API", "expected_result": "200"}],
+    }
+    payload = {
+        "project_id": client.project_id,
+        "test_suite_id": suite_id,
+        "section_id": section_id,
+        "duplicate_mode": "copy",
+        "drafts": [draft],
+    }
+
+    first = client.post("/import-export/openapi/commit", json=payload)
+    second = client.post("/import-export/openapi/commit", json=payload)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["created"] == second.json()["created"] == 1
+    assert first.json()["created_ids"] != second.json()["created_ids"]
+
+    original = client.get(f"/test-cases/{first.json()['created_ids'][0]}").json()
+    copied = client.get(f"/test-cases/{second.json()['created_ids'][0]}").json()
+    assert original["section_id"] == copied["section_id"] == section_id
+    assert original["title"] == "Health — success"
+    assert copied["title"] == "Health — success (copy)"
+
+
+def test_commit_rejects_section_from_another_suite(client):
+    target_suite_id = _suite(client, client.project_id, "Target")
+    other_suite_id = _suite(client, client.project_id, "Other")
+    other_section_id = _section(client, other_suite_id)
+    response = client.post("/import-export/openapi/commit", json={
+        "project_id": client.project_id,
+        "test_suite_id": target_suite_id,
+        "section_id": other_section_id,
+        "drafts": [{
+            "operation_key": "get:/health:success",
+            "title": "Health — success",
+            "reference": "GET /health",
+            "steps": [{"step_number": 1, "action": "Call API", "expected_result": "200"}],
+        }],
+    })
+    assert response.status_code == 400
+    assert "Section must belong" in response.json()["detail"]
+
+
+def test_openapi_import_rejects_project_outsider(client):
+    from app import models
+
+    suite_id = _suite(client, client.project_id)
+    with client.SessionLocal() as db:
+        outsider = models.User(
+            username="openapi-outsider",
+            email="openapi-outsider@example.com",
+            hashed_password="x",
+            role="user",
+            is_active=True,
+            full_name="OpenAPI Outsider",
+        )
+        db.add(outsider)
+        db.commit()
+        db.refresh(outsider)
+        outsider_id = outsider.id
+
+    client.set_current_user(outsider_id)
+    preview = client.post(
+        "/import-export/openapi/preview",
+        data={"project_id": str(client.project_id)},
+        files={"file": ("openapi.json", json.dumps(_document()), "application/json")},
+    )
+    assert preview.status_code == 403
+
+    commit = client.post("/import-export/openapi/commit", json={
+        "project_id": client.project_id,
+        "test_suite_id": suite_id,
+        "drafts": [{
+            "operation_key": "get:/health:success",
+            "title": "Health — success",
+            "reference": "GET /health",
+            "steps": [{"step_number": 1, "action": "Call API", "expected_result": "200"}],
+        }],
+    })
+    assert commit.status_code == 403

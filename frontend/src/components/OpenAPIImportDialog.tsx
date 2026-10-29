@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileJson, Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
 import { getApiErrorMessage, importExportAPI, OpenAPIDraft, OpenAPIPreview } from '@/lib/api';
+import type { Section } from '@/types/testCases';
 
 type Props = {
   open: boolean;
@@ -16,22 +17,48 @@ type Props = {
   projectId: number;
   testSuiteId: number;
   sectionId?: number;
+  testSuites: Array<{ id: number; name: string }>;
+  sections: Section[];
   onImported: () => Promise<void> | void;
 };
 
-export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId, sectionId, onImported }: Props) {
+export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId, sectionId, testSuites, sections, onImported }: Props) {
   const { t, isRTL } = useTranslation();
   const { toast } = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<OpenAPIPreview | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [duplicateMode, setDuplicateMode] = useState<'skip' | 'copy'>('skip');
+  const [targetSuiteId, setTargetSuiteId] = useState(testSuiteId);
+  const [targetSectionId, setTargetSectionId] = useState<number | undefined>(sectionId);
   const [loading, setLoading] = useState(false);
+
+  const sectionOptions = useMemo(() => {
+    const result: Array<{ id: number; label: string }> = [];
+    const visit = (items: Section[], depth = 0) => {
+      items.forEach((section) => {
+        if (section.test_suite_id === targetSuiteId) {
+          result.push({ id: Number(section.id), label: `${'— '.repeat(depth)}${section.name}` });
+        }
+        visit(section.children || [], depth + 1);
+      });
+    };
+    visit(sections);
+    return result;
+  }, [sections, targetSuiteId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setTargetSuiteId(testSuiteId);
+    setTargetSectionId(sectionId);
+  }, [open, sectionId, testSuiteId]);
 
   const reset = () => {
     setPreview(null);
     setSelected(new Set());
     setDuplicateMode('skip');
+    setTargetSuiteId(testSuiteId);
+    setTargetSectionId(sectionId);
     if (fileInput.current) fileInput.current.value = '';
   };
 
@@ -68,8 +95,8 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
     try {
       const result = await importExportAPI.commitOpenAPI({
         project_id: projectId,
-        test_suite_id: testSuiteId,
-        section_id: sectionId,
+        test_suite_id: targetSuiteId,
+        section_id: targetSectionId,
         duplicate_mode: duplicateMode,
         drafts,
       });
@@ -105,12 +132,21 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
           <div className="space-y-4">
             <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg bg-muted/40 p-3">
               <div><p className="font-medium">{preview.title}</p><p className="text-xs text-muted-foreground">OpenAPI {preview.version} · {preview.operations.length} {t('operations')} · {preview.drafts.length} {t('generatedTestCases')}</p></div>
-              <div className="w-44 space-y-1"><Label>{t('duplicateHandling')}</Label><Select value={duplicateMode} onValueChange={(value: 'skip' | 'copy') => setDuplicateMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="skip">{t('skipDuplicates')}</SelectItem><SelectItem value="copy">{t('createCopy')}</SelectItem></SelectContent></Select></div>
+              <div className="grid w-full gap-3 sm:grid-cols-3">
+                <div className="space-y-1"><Label>{t('testSuite')}</Label><Select value={String(targetSuiteId)} onValueChange={(value) => { setTargetSuiteId(Number(value)); setTargetSectionId(undefined); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{testSuites.map((suite) => <SelectItem key={suite.id} value={String(suite.id)}>{suite.name}</SelectItem>)}</SelectContent></Select></div>
+                <div className="space-y-1"><Label>{t('sections')}</Label><Select value={targetSectionId ? String(targetSectionId) : 'none'} onValueChange={(value) => setTargetSectionId(value === 'none' ? undefined : Number(value))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noSection')}</SelectItem>{sectionOptions.map((section) => <SelectItem key={section.id} value={String(section.id)}>{section.label}</SelectItem>)}</SelectContent></Select></div>
+                <div className="space-y-1"><Label>{t('duplicateHandling')}</Label><Select value={duplicateMode} onValueChange={(value: 'skip' | 'copy') => setDuplicateMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="skip">{t('skipDuplicates')}</SelectItem><SelectItem value="copy">{t('createCopy')}</SelectItem></SelectContent></Select></div>
+              </div>
             </div>
             <div className="space-y-2">
               {preview.drafts.map((draft, index) => (
                 <div key={`${draft.operation_key}-${index}`} className="flex items-start gap-3 rounded-lg border p-3">
-                  <Checkbox checked={selected.has(index)} onCheckedChange={(checked) => setSelected((current) => { const next = new Set(current); checked ? next.add(index) : next.delete(index); return next; })} />
+                  <Checkbox checked={selected.has(index)} onCheckedChange={(checked) => setSelected((current) => {
+                    const next = new Set(current);
+                    if (checked) next.add(index);
+                    else next.delete(index);
+                    return next;
+                  })} />
                   <div className="min-w-0 flex-1 space-y-1"><Input value={draft.title} onChange={(event) => updateTitle(index, event.target.value)} /><p className="text-xs text-muted-foreground">{draft.reference} · {draft.steps.length} {t('steps')}</p></div>
                 </div>
               ))}
