@@ -22,7 +22,7 @@ LEASE_SECONDS = 90
 logger = logging.getLogger(__name__)
 SAFE_ENVIRONMENT_CONFIG_KEYS = {
     "base_url", "app_url", "api_url", "package_name", "bundle_id",
-    "device_name", "platform", "browser", "locale",
+    "device_name", "platform", "platform_name", "browser", "locale", "appium_url",
 }
 
 

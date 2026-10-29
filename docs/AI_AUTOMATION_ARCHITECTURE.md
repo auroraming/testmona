@@ -102,3 +102,13 @@ plus independent status, JSON-path, and header assertions. A successful HTTP
 round trip never passes a task without assertions. Credential-reference
 injection, retries, OpenAPI script materialization, and the API MCP comparison
 remain open.
+
+## Mobile Runner baseline
+
+The optional `mobile-runner` profile is a small W3C WebDriver client that
+connects to an externally managed Appium 2 endpoint. It probes the endpoint and
+creates one exclusive session before executing tap, type, swipe, screenshot,
+text-assertion, or visibility-assertion steps. Missing Appium or unavailable
+devices produce a blocked task rather than a false pass. Android emulators and
+iOS/macOS/Xcode remain deployment responsibilities of the device host; a
+server-side device catalog/lock and mobile-mcp discovery are still open.
