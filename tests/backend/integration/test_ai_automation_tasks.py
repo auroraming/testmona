@@ -373,6 +373,60 @@ def test_evidence_rejects_secrets_and_external_artifact_urls(client):
     assert response.status_code == 422
 
 
+def test_runner_uploads_and_authorized_user_downloads_referenced_artifact(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_AUTOMATION_ARTIFACT_DIR", str(tmp_path))
+    _, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "web", "goal": "Capture screenshot",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    upload = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/artifacts",
+        headers={**headers, "X-Lease-Token": lease["lease_token"]},
+        files={"file": ("screen.png", b"\x89PNG\r\nsmall", "image/png")},
+    )
+    assert upload.status_code == 200, upload.text
+    artifact = upload.json()
+    assert artifact["size"] == len(b"\x89PNG\r\nsmall")
+    assert artifact["artifact_ref"].startswith(f"ai-automation/{task['id']}/")
+
+    evidence = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [{
+            "sequence": 1, "evidence_type": "screenshot", "title": "Login page",
+            "artifact_ref": artifact["artifact_ref"],
+        }]},
+    )
+    assert evidence.status_code == 200, evidence.text
+    artifact_name = artifact["artifact_ref"].rsplit("/", 1)[-1]
+    download = client.get(f"/ai-automation/tasks/{task['id']}/artifacts/{artifact_name}")
+    assert download.status_code == 200, download.text
+    assert download.content == b"\x89PNG\r\nsmall"
+
+
+def test_artifact_upload_rejects_unsupported_type_and_missing_lease(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_AUTOMATION_ARTIFACT_DIR", str(tmp_path))
+    _, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "web", "goal": "Unsafe artifact",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    missing = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/artifacts",
+        headers=headers, files={"file": ("x.png", b"x", "image/png")},
+    )
+    assert missing.status_code == 401
+    unsupported = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/artifacts",
+        headers={**headers, "X-Lease-Token": lease["lease_token"]},
+        files={"file": ("x.html", b"<html>", "text/html")},
+    )
+    assert unsupported.status_code == 415
+
+
 def test_user_and_runner_actions_are_audited_with_actor_metadata(client):
     runner, token = _register_runner(client)
     task = client.post("/ai-automation/tasks", json={

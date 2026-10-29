@@ -1,49 +1,50 @@
 import { chromium } from 'playwright';
+import { readFile, unlink } from 'node:fs/promises';
 import { executeScript } from './executor.js';
+import { RunnerProtocol, delay } from '../../common/protocol.js';
 
 const backendUrl = process.env.TESTMONA_BACKEND_URL;
 const runnerToken = process.env.TESTMONA_RUNNER_TOKEN;
 const pollMs = Number(process.env.TESTMONA_RUNNER_POLL_MS || 3000);
 if (!backendUrl || !runnerToken) throw new Error('TESTMONA_BACKEND_URL and TESTMONA_RUNNER_TOKEN are required');
-
-async function request(path, options = {}) {
-  const response = await fetch(`${backendUrl.replace(/\/$/, '')}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', 'X-Runner-Token': runnerToken, ...(options.headers || {}) },
-  });
-  if (response.status === 204) return null;
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || `Runner protocol HTTP ${response.status}`);
-  return data;
-}
+const protocol = new RunnerProtocol(backendUrl, runnerToken);
 
 async function runLease(lease) {
   const task = lease.task;
   if (task.execution_mode !== 'script') {
-    await request(`/internal/ai-automation/tasks/${task.id}/report`, {
-      method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, status: 'blocked', error_message: 'Web AI mode requires the Playwright MCP integration' }),
-    });
+    await protocol.report(lease, 'blocked', null, 'Web AI mode requires the Playwright MCP integration');
     return;
   }
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   let cancelRequested = false;
   const heartbeat = setInterval(() => {
-    request('/internal/ai-automation/heartbeat', { method: 'POST', body: JSON.stringify({ task_id: task.id, lease_token: lease.lease_token }) })
+    protocol.heartbeat(lease)
       .then((status) => { cancelRequested = Boolean(status.cancel_requested); })
       .catch(console.error);
   }, 30000);
   try {
     const result = await executeScript(page, task.config?.script, async (item) => {
-      await request(`/internal/ai-automation/tasks/${task.id}/evidence`, {
-        method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, items: [item] }),
-      });
+      const localPath = item.payload.local_artifact_path;
+      if (localPath) {
+        const uploaded = await protocol.uploadArtifact(lease, await readFile(localPath), `step-${item.sequence}.png`, 'image/png');
+        delete item.payload.local_artifact_path;
+        item.artifact_ref = uploaded.artifact_ref;
+        await unlink(localPath).catch(() => {});
+      }
+      await protocol.appendEvidence(lease, [item]);
     }, () => cancelRequested);
-    await request(`/internal/ai-automation/tasks/${task.id}/report`, {
-      method: 'POST',
-      body: JSON.stringify({ lease_token: lease.lease_token, status: result.cancelled ? 'cancelled' : result.passed ? 'passed' : 'failed', result, error_message: result.error }),
-    });
+    const tracePath = `artifacts/task-${task.id}-trace.zip`;
+    await context.tracing.stop({ path: tracePath });
+    const trace = await protocol.uploadArtifact(lease, await readFile(tracePath), `task-${task.id}-trace.zip`, 'application/zip');
+    await unlink(tracePath).catch(() => {});
+    await protocol.appendEvidence(lease, [{
+      sequence: (task.config?.script?.length || 0) + 1, evidence_type: 'trace', title: 'Playwright trace',
+      status: 'completed', payload: {}, artifact_ref: trace.artifact_ref,
+    }]);
+    await protocol.report(lease, result.cancelled ? 'cancelled' : result.passed ? 'passed' : 'failed', result, result.error);
   } finally {
     clearInterval(heartbeat);
     await context.close();
@@ -53,11 +54,11 @@ async function runLease(lease) {
 
 while (true) {
   try {
-    const lease = await request('/internal/ai-automation/claim', { method: 'POST' });
+    const lease = await protocol.claim();
     if (lease) await runLease(lease);
-    else await new Promise((resolve) => setTimeout(resolve, pollMs));
+    else await delay(pollMs);
   } catch (error) {
     console.error(error);
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await delay(pollMs);
   }
 }

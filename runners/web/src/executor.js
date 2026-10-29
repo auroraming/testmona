@@ -48,7 +48,7 @@ export async function executeScript(page, script, emitEvidence, shouldCancel = (
       } else if (step.action === 'screenshot') {
         const artifactRef = `artifacts/step-${sequence}.png`;
         await page.screenshot({ path: artifactRef, fullPage: Boolean(step.full_page) });
-        payload.artifact_ref = artifactRef;
+        payload.local_artifact_path = artifactRef;
       }
       payload.duration_ms = Date.now() - startedAt;
       await emitEvidence({ sequence, evidence_type: step.action.startsWith('assert_') ? 'assertion' : 'step', title: step.action, status, payload });

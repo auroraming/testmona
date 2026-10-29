@@ -52,7 +52,8 @@ AI 自动化交付阶段：
     - [x] 固定脚本基础：新增独立 Compose profile，Playwright 包与官方 Chromium 镜像共同锁定 1.64.1，使用非 root 用户、移除 Linux capabilities 并配置 CPU/内存上限。
   - [ ] 支持 Web AI 探索、截图/Trace/网络日志采集，以及固定脚本批量回归和 CI 调用。
     - [x] 固定脚本执行器：支持导航、点击、填写、截图、文本/可见性独立断言、逐步证据及心跳取消；没有显式断言时禁止判为通过。
-    - [ ] 接入 Playwright MCP AI 探索、受控截图/Trace 上传下载、网络日志、批量回归和 CI 模板。
+    - [x] 受控截图/Trace：Runner 通过有效任务租约上传限定 MIME、最大 20 MB 的制品，证据保存不可猜测引用；项目内授权用户仅能下载已被证据引用的文件。
+    - [ ] 接入 Playwright MCP AI 探索、网络日志、批量回归和 CI 模板。
   - [ ] 验收：部署后可执行一条真实 Web 用例，并将断言、截图、Trace、日志、耗时关联回用例、计划和执行轮次。
 - [ ] AI-V1.2：mobile-mcp + Mobile Runner + 设备发现。
   - [ ] Worker 注册 Android/iOS 真机或模拟器，提供设备能力、占用锁、心跳、授权和离线状态。
@@ -133,6 +134,7 @@ PRD：docs/PRD-用例脑图工作台.md
 - 2026-10-30：启动 AI-V1.1 Web Runner。新增独立 Playwright 1.64.1/Chromium 容器与 Compose profile，非 root 运行、移除 capabilities 并限制资源；固定脚本支持导航、点击、填写、截图、显式文本/可见性断言、步骤证据和取消，禁止无断言通过。Node 专项 2 项测试及 Compose 配置校验通过；Playwright MCP、受控制品上传、Trace/网络日志与真实浏览器端到端仍待完成。
 - 2026-10-30：启动 AI-V1.3 原生 API Runner。新增独立轻量容器和统一 Runner 协议客户端，固定脚本支持 HTTP 请求、单请求超时、状态码、JSON 路径及响应头断言；请求路径必须保持在环境 Base URL 同源范围内，请求成功本身不作为通过。Node 专项 2 项测试及 Compose 配置校验通过；凭据引用、重试、OpenAPI 直连和 API MCP 一致性仍待完成。
 - 2026-10-30：启动 AI-V1.2 Mobile Runner。新增独立 Appium 2/W3C WebDriver Worker，连接外部 Android/iOS 设备池并在执行前探活、创建独占 Session；支持 tap、type、swipe、截图触发、文本/可见性断言、心跳取消，无 Appium 或无设备时回报 blocked。Node 专项 2 项、后端 12 项及 Compose 配置校验通过；服务端设备目录/锁、mobile-mcp、制品上传和真实 Android/iOS 验收仍待完成。
+- 2026-10-30：统一 Runner 制品链完成。新增租约保护的 PNG、ZIP Trace、JSON 和文本上传，20 MB 上限、随机文件名及 SHA-256；下载同时校验项目权限和证据引用，未引用文件不可访问。Web Runner 自动上传截图与 Playwright Trace，Mobile Runner 上传截图。后端 14 项、三类 Runner 6 项测试及 Compose 校验通过，并移除过时 Compose version 字段。
 - 2026-10-30：读取 Notion《TestMona｜内置 AI 自动化测试能力规划（Web · Mobile · API）》并写入本计划。新增 AI-V1～AI-V1.4 分阶段路线、候选组件 PoC、Runner 部署边界、统一执行模型、安全约束和首期验收清单；全部按规划未实施状态记录，未将目标方案标记为现有能力。
 - 2026-10-29：开始 V1/P0。完成首个可运行切片：用例库新增列表/脑图切换；脑图直接读取真实套件、目录和用例；新增模块、新增用例、目录/用例改名均调用现有业务接口；用例节点可打开真实详情。前端生产构建通过。尚未完成拖动同步、字段节点、快捷键、回收站和交互验收，V1 保持进行中。
 - 2026-10-29：继续 V1/P0。完成真实拖动、右侧基础字段与优先级编辑、常用快捷键、同套件用例/模块复制剪切粘贴、用例软删除和回收站恢复，并加入 updated_at 乐观并发冲突检查。前端生产构建、定向 ESLint、Python 编译和现有目录集成测试通过；结构化步骤节点、草稿离开保护、撤销重做及完整 AC 验收仍待完成。

@@ -22,6 +22,6 @@ array. Supported actions are `navigate`, `click`, `fill`, `assert_text`,
 one assertion must pass before the task can pass; successful navigation or
 clicks alone never count as a passed test.
 
-Screenshot files currently remain in the worker's local `artifacts/` directory.
-Controlled artifact upload/download is still required before screenshots and
-Playwright traces are production evidence.
+Screenshots and the Playwright Trace are uploaded through the lease-protected
+artifact endpoint and attached to immutable evidence. Temporary local files are
+removed after upload.

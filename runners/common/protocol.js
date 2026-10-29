@@ -27,6 +27,18 @@ export class RunnerProtocol {
       method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, items }),
     });
   }
+  async uploadArtifact(lease, bytes, filename, contentType) {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: contentType }), filename);
+    const response = await fetch(`${this.backendUrl}/internal/ai-automation/tasks/${lease.task.id}/artifacts`, {
+      method: 'POST',
+      headers: { 'X-Runner-Token': this.runnerToken, 'X-Lease-Token': lease.lease_token },
+      body: form,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || `Artifact upload HTTP ${response.status}`);
+    return data;
+  }
   report(lease, status, result, errorMessage = null) {
     return this.request(`/internal/ai-automation/tasks/${lease.task.id}/report`, {
       method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, status, result, error_message: errorMessage }),

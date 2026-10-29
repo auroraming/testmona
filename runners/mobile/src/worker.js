@@ -19,7 +19,15 @@ async function run(lease) {
   }
   const heartbeat = setInterval(() => protocol.heartbeat(lease).then((state) => { cancelled = state.cancel_requested; }).catch(console.error), 30000);
   try {
-    const result = await executeMobileScript(driver, lease.task.config?.script, (item) => protocol.appendEvidence(lease, [item]), () => cancelled);
+    const result = await executeMobileScript(driver, lease.task.config?.script, async (item) => {
+      if (item.payload.screenshot_base64) {
+        const bytes = Buffer.from(item.payload.screenshot_base64, 'base64');
+        delete item.payload.screenshot_base64;
+        const uploaded = await protocol.uploadArtifact(lease, bytes, `step-${item.sequence}.png`, 'image/png');
+        item.artifact_ref = uploaded.artifact_ref;
+      }
+      await protocol.appendEvidence(lease, [item]);
+    }, () => cancelled);
     return protocol.report(lease, result.cancelled ? 'cancelled' : result.passed ? 'passed' : 'failed', result, result.error);
   } finally { clearInterval(heartbeat); await driver.close().catch(console.error); }
 }

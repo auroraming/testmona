@@ -10,7 +10,7 @@ export async function executeMobileScript(driver, script, emitEvidence, shouldCa
     const payload = { action: step.action }; const startedAt = Date.now();
     try {
       if (step.action === 'swipe') await driver.swipe(step);
-      else if (step.action === 'screenshot') { await driver.screenshot(); payload.screenshot_captured = true; }
+      else if (step.action === 'screenshot') { payload.screenshot_base64 = await driver.screenshot(); }
       else {
         const element = await driver.find(step.selector);
         if (step.action === 'tap') await driver.click(element);

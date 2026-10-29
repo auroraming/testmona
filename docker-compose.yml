@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -75,8 +73,8 @@ services:
 
   web-runner:
     build:
-      context: ./runners/web
-      dockerfile: Dockerfile
+      context: ./runners
+      dockerfile: web/Dockerfile
     profiles: ["web-runner"]
     init: true
     ipc: host

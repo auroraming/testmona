@@ -112,3 +112,13 @@ text-assertion, or visibility-assertion steps. Missing Appium or unavailable
 devices produce a blocked task rather than a false pass. Android emulators and
 iOS/macOS/Xcode remain deployment responsibilities of the device host; a
 server-side device catalog/lock and mobile-mcp discovery are still open.
+
+## Artifact boundary
+
+An active Runner with both its identity token and task lease may upload PNG,
+ZIP, JSON, or plain-text evidence up to 20 MB. The backend assigns a random
+name, records size and SHA-256, and returns an opaque relative reference. A user
+may download the file only when they can read the project and an immutable
+evidence row on that task references it. Web scripts now upload screenshots and
+Playwright traces; Mobile scripts upload screenshots without embedding base64
+data in evidence payloads.

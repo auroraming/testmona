@@ -5,9 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
+import os
+from pathlib import Path as FilePath
 import secrets
+import uuid
 
-from fastapi import Depends, Header, HTTPException, Path, Query, Response
+from fastapi import Depends, File, Header, HTTPException, Path, Query, Response, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,6 +23,13 @@ from ..database import get_db
 
 TERMINAL_STATUSES = {"cancelled", "passed", "failed", "blocked", "timed_out"}
 LEASE_SECONDS = 90
+MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
+ARTIFACT_CONTENT_TYPES = {
+    "image/png": ".png",
+    "application/zip": ".zip",
+    "application/json": ".json",
+    "text/plain": ".txt",
+}
 logger = logging.getLogger(__name__)
 SAFE_ENVIRONMENT_CONFIG_KEYS = {
     "base_url", "app_url", "api_url", "package_name", "bundle_id",
@@ -143,6 +154,10 @@ def _build_runner_context(task: models.AIAutomationTask) -> dict:
             },
         }
     return context
+
+
+def _artifact_root() -> FilePath:
+    return FilePath(os.getenv("AI_AUTOMATION_ARTIFACT_DIR", "uploads/ai-automation")).resolve()
 
 
 def register_ai_automation_routes(app) -> None:
@@ -487,3 +502,70 @@ def register_ai_automation_routes(app) -> None:
         for item in results:
             db.refresh(item)
         return sorted(results, key=lambda item: item.sequence)
+
+    @app.post("/internal/ai-automation/tasks/{task_id}/artifacts")
+    async def upload_ai_automation_artifact(
+        task_id: int = Path(..., ge=1),
+        file: UploadFile = File(...),
+        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+        x_lease_token: str | None = Header(None, alias="X-Lease-Token"),
+        db: Session = Depends(get_db),
+    ):
+        runner = _authenticate_runner(db, x_runner_token)
+        task = _get_task(db, task_id)
+        if not x_lease_token:
+            raise HTTPException(status_code=401, detail="Task lease is required")
+        _verify_lease(task, runner, x_lease_token)
+        if task.status not in {"running", "cancel_requested"}:
+            raise HTTPException(status_code=409, detail="Artifacts can only be uploaded while a task is active")
+        suffix = ARTIFACT_CONTENT_TYPES.get((file.content_type or "").lower())
+        if suffix is None:
+            raise HTTPException(status_code=415, detail="Unsupported automation artifact type")
+
+        artifact_name = f"{uuid.uuid4().hex}{suffix}"
+        task_dir = _artifact_root() / str(task.id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        destination = task_dir / artifact_name
+        size = 0
+        digest = hashlib.sha256()
+        try:
+            with destination.open("wb") as output:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_ARTIFACT_BYTES:
+                        raise HTTPException(status_code=413, detail="Automation artifact exceeds 20 MB")
+                    digest.update(chunk)
+                    output.write(chunk)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        finally:
+            await file.close()
+        return {
+            "artifact_ref": f"ai-automation/{task.id}/{artifact_name}",
+            "content_type": file.content_type,
+            "size": size,
+            "sha256": digest.hexdigest(),
+        }
+
+    @app.get("/ai-automation/tasks/{task_id}/artifacts/{artifact_name}")
+    def download_ai_automation_artifact(
+        task_id: int = Path(..., ge=1),
+        artifact_name: str = Path(..., pattern=r"^[a-f0-9]{32}\.(png|zip|json|txt)$"),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        task = _get_task(db, task_id)
+        if not rbac.has_permission(current_user, "read", task.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        artifact_ref = f"ai-automation/{task.id}/{artifact_name}"
+        evidence = db.query(models.AIAutomationEvidence).filter(
+            models.AIAutomationEvidence.task_id == task.id,
+            models.AIAutomationEvidence.artifact_ref == artifact_ref,
+        ).first()
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="Automation artifact not found")
+        path = _artifact_root() / str(task.id) / artifact_name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Automation artifact file is unavailable")
+        return FileResponse(path, filename=artifact_name)
