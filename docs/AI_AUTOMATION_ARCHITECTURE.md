@@ -82,3 +82,13 @@ and step data are excluded. The SDK maintains heartbeats, appends immutable
 step observations through the Runtime callback, and reports terminal status and
 token totals idempotently. Production Web/Mobile/API tool implementations remain
 the next deployment boundary.
+
+## Web Runner baseline
+
+The optional `web-runner` Compose profile is isolated from the API image and
+pins both the Playwright package and official Chromium image to `1.64.1`. Its
+first fixed-script executor supports navigation, click, fill, screenshot, text
+assertions, and visibility assertions, with heartbeat cancellation and evidence
+after each step. It refuses to pass a script with no explicit assertion. AI
+exploration through Playwright MCP and controlled screenshot/Trace upload remain
+open before this Runner is production-ready.

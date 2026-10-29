@@ -73,6 +73,33 @@ services:
           cpus: '0.5'
           memory: '256m'
 
+  web-runner:
+    build:
+      context: ./runners/web
+      dockerfile: Dockerfile
+    profiles: ["web-runner"]
+    init: true
+    ipc: host
+    environment:
+      - TESTMONA_BACKEND_URL=${TESTMONA_BACKEND_URL:-http://backend:8000}
+      - TESTMONA_RUNNER_TOKEN=${TESTMONA_WEB_RUNNER_TOKEN:-}
+      - TESTMONA_RUNNER_POLL_MS=${TESTMONA_RUNNER_POLL_MS:-3000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '${WEB_RUNNER_CPUS:-1.0}'
+          memory: '${WEB_RUNNER_MEMORY_LIMIT:-1g}'
+
   # Optional MariaDB backend. SQLite is the zero-config default; enable this
   # with `docker compose --profile mariadb up` and point DATABASE_URL at it:
   #   DATABASE_URL=mysql+pymysql://root:<pw>@mariadb:3306/test_management?charset=utf8mb4

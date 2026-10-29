@@ -1,0 +1,27 @@
+# TestMona Web Runner
+
+This optional worker executes reviewed, fixed Web scripts outside the main API
+process. It uses Playwright and Chromium `1.64.1`; the package and official
+container image versions are deliberately identical.
+
+## Start
+
+1. Register a `web` Runner in TestMona and copy the one-time `tmr_...` token.
+2. Set `TESTMONA_WEB_RUNNER_TOKEN` in the deployment environment.
+3. Run `docker compose --profile web-runner up --build web-runner`.
+
+Do not put the token in source control. The worker drops Linux capabilities,
+runs as the image's `pwuser`, and only reaches TestMona through the private
+Runner protocol.
+
+## Fixed script format
+
+Create a Web automation task with `execution_mode: "script"` and a `config.script`
+array. Supported actions are `navigate`, `click`, `fill`, `assert_text`,
+`assert_visible`, and `screenshot`. Selectors and values are explicit. At least
+one assertion must pass before the task can pass; successful navigation or
+clicks alone never count as a passed test.
+
+Screenshot files currently remain in the worker's local `artifacts/` directory.
+Controlled artifact upload/download is still required before screenshots and
+Playwright traces are production evidence.
