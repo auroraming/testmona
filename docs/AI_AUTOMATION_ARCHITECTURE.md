@@ -56,3 +56,12 @@ Retries with the same sequence and content are idempotent; conflicting content
 is rejected. Binary files remain in controlled object storage and evidence only
 stores a relative storage reference. External URLs, filesystem paths, oversized
 payloads, and credential-shaped fields are rejected.
+
+## Internal MCP client contract
+
+The Agent Runtime uses `AutomationMCPClient` instead of constructing raw MCP
+requests. Every task supplies a non-empty tool allowlist. Discovery hides all
+other server tools, arguments are checked against the discovered JSON Schema
+before transport, and ping/call timeouts and protocol failures become stable,
+structured errors. This client is an internal execution dependency and is
+separate from TestMona's user-facing remote `/mcp` server.
