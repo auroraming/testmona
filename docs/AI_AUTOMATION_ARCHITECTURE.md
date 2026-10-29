@@ -92,3 +92,13 @@ assertions, and visibility assertions, with heartbeat cancellation and evidence
 after each step. It refuses to pass a script with no explicit assertion. AI
 exploration through Playwright MCP and controlled screenshot/Trace upload remain
 open before this Runner is production-ready.
+
+## API Runner baseline
+
+The optional `api-runner` Compose profile uses the same lease, heartbeat,
+evidence, and report protocol. Fixed scripts issue requests only to relative
+paths under the configured environment origin and record network observations
+plus independent status, JSON-path, and header assertions. A successful HTTP
+round trip never passes a task without assertions. Credential-reference
+injection, retries, OpenAPI script materialization, and the API MCP comparison
+remain open.
