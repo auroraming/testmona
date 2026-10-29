@@ -12,7 +12,7 @@ import type { TestCase } from '@/types';
 import type { Section } from '@/types/testCases';
 
 type SelectedNode = {
-  kind: 'suite' | 'section' | 'case';
+  kind: 'suite' | 'section' | 'case' | 'field';
   id: number;
   title: string;
   suiteId: number;
@@ -20,7 +20,10 @@ type SelectedNode = {
   parentSectionId?: number | null;
   priority?: string;
   caseSeq?: number | null;
+  caseId?: number;
+  fieldKey?: keyof CaseDraft;
 };
+type ActionNode = Omit<SelectedNode, 'kind'> & { kind: 'suite' | 'section' | 'case' };
 
 type CaseDraft = Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result'>;
 type CaseStepDraft = { step_number: number; action: string; expected_result: string; step_type: string };
@@ -73,13 +76,22 @@ type Props = {
   onUpdateCase: (testCaseId: number, patch: Partial<Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>>) => Promise<void>;
   onLoadCaseSteps: (testCaseId: number) => Promise<CaseStepDraft[]>;
   onUpdateCaseSteps: (testCaseId: number, steps: CaseStepDraft[]) => Promise<void>;
-  onCopyNode: (node: SelectedNode, targetSectionId: number | null) => Promise<void>;
-  onDeleteNode: (node: SelectedNode) => Promise<void>;
+  onCopyNode: (node: ActionNode, targetSectionId: number | null) => Promise<void>;
+  onDeleteNode: (node: ActionNode) => Promise<void>;
   onOpenCase: (testCaseId: number) => void;
 };
 
 const sectionNodeId = (id: string | number) => `section:${id}`;
 const caseNodeId = (id: number) => `case:${id}`;
+const fieldNodeId = (caseId: number, fieldKey: keyof CaseDraft) => `field:${caseId}:${fieldKey}`;
+const selectedCaseNodeId = (node: SelectedNode | null | undefined) => node?.kind === 'case' ? node.id : node?.kind === 'field' ? node.caseId : undefined;
+const mindNodeId = (node: SelectedNode) => node.kind === 'suite'
+  ? `suite:${node.id}`
+  : node.kind === 'section'
+    ? sectionNodeId(node.id)
+    : node.kind === 'field' && node.caseId && node.fieldKey
+      ? fieldNodeId(node.caseId, node.fieldKey)
+      : caseNodeId(node.id);
 
 export function TestCaseMindmapView({
   suiteId,
@@ -118,7 +130,7 @@ export function TestCaseMindmapView({
   const [historyIndex, setHistoryIndex] = useState(0);
   const [pendingSelection, setPendingSelection] = useState<SelectedNode | null>(null);
   const [guardOpen, setGuardOpen] = useState(false);
-  const [clipboard, setClipboard] = useState<{ mode: 'copy' | 'cut'; node: SelectedNode } | null>(null);
+  const [clipboard, setClipboard] = useState<{ mode: 'copy' | 'cut'; node: ActionNode } | null>(null);
   const clipboardRef = useRef<typeof clipboard>(null);
   const selectedRef = useRef<SelectedNode | null>(null);
   const dirtyRef = useRef(false);
@@ -130,7 +142,8 @@ export function TestCaseMindmapView({
   useEffect(() => { draftHistoryRef.current = draftHistory; }, [draftHistory]);
   useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
 
-  const selectedCase = selected?.kind === 'case' ? testCases.find((testCase) => testCase.id === selected.id) : undefined;
+  const selectedCaseId = selected?.kind === 'case' ? selected.id : selected?.kind === 'field' ? selected.caseId : undefined;
+  const selectedCase = selectedCaseId ? testCases.find((testCase) => testCase.id === selectedCaseId) : undefined;
 
   useEffect(() => {
     if (!selectedCase) return;
@@ -219,6 +232,23 @@ export function TestCaseMindmapView({
       casesBySection.set(key, [...(casesBySection.get(key) || []), testCase]);
     });
 
+    const makeField = (testCase: TestCase, fieldKey: keyof CaseDraft, label: string, value: string | undefined): NodeObj => ({
+      id: fieldNodeId(testCase.id, fieldKey),
+      topic: value || '—',
+      tags: [label],
+      metadata: {
+        kind: 'field',
+        id: testCase.id,
+        caseId: testCase.id,
+        fieldKey,
+        title: label,
+        suiteId,
+        sectionId: testCase.section_id,
+        parentSectionId: testCase.section_id,
+      },
+      children: [],
+    });
+
     const makeCase = (testCase: TestCase): NodeObj => ({
       id: caseNodeId(testCase.id),
       topic: testCase.title,
@@ -236,7 +266,14 @@ export function TestCaseMindmapView({
         priority: testCase.priority,
         caseSeq: testCase.project_seq,
       },
-      children: [],
+      children: [
+        makeField(testCase, 'preconditions', labels.preconditions, testCase.preconditions),
+        makeField(testCase, 'description', labels.description, testCase.description),
+        ...(!testCase.is_multistep ? [
+          makeField(testCase, 'steps', labels.steps, testCase.steps),
+          makeField(testCase, 'expected_result', labels.expectedResult, testCase.expected_result),
+        ] : []),
+      ],
     });
 
     const makeSection = (section: Section): NodeObj => ({
@@ -270,10 +307,10 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [sections, suiteId, suiteName, testCases]);
+  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, suiteId, suiteName, testCases]);
 
   const dataSignature = useMemo(
-    () => JSON.stringify([suiteId, sections, testCases.map(({ id, title, section_id, priority, project_seq }) => [id, title, section_id, priority, project_seq])]),
+    () => JSON.stringify([suiteId, sections, testCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
     [sections, suiteId, testCases],
   );
 
@@ -305,11 +342,11 @@ export function TestCaseMindmapView({
     const select = (nodes: NodeObj[]) => {
       const metadata = nodes[nodes.length - 1]?.metadata as SelectedNode | undefined;
       const current = selectedRef.current;
-      if (dirtyRef.current && current?.kind === 'case' && metadata?.id !== current.id) {
+      if (dirtyRef.current && selectedCaseNodeId(current) && selectedCaseNodeId(metadata) !== selectedCaseNodeId(current)) {
         setPendingSelection(metadata || null);
         setGuardOpen(true);
         queueMicrotask(() => {
-          const currentElement = mind.findEle(caseNodeId(current.id));
+          const currentElement = mind.findEle(mindNodeId(current));
           if (currentElement) mind.selectNode(currentElement);
         });
         return;
@@ -337,7 +374,11 @@ export function TestCaseMindmapView({
         setSyncing(true);
         try {
           if (metadata.kind === 'section') await onRenameSection(metadata.id, operation.obj.topic);
-          else await onRenameCase(metadata.id, operation.obj.topic);
+          else if (metadata.kind === 'case') await onRenameCase(metadata.id, operation.obj.topic);
+          else if (metadata.caseId && metadata.fieldKey) {
+            const value = operation.obj.topic === '—' ? '' : operation.obj.topic;
+            await onUpdateCase(metadata.caseId, { [metadata.fieldKey]: value });
+          }
         } catch {
           mind.refresh(structuredClone(data));
         } finally {
@@ -351,7 +392,7 @@ export function TestCaseMindmapView({
         for (const node of operation.objs) {
           const metadata = node.metadata as SelectedNode | undefined;
           const parent = node.parent?.metadata as SelectedNode | undefined;
-          if (!metadata || !parent || parent.kind === 'case') throw new Error(labels.syncFailed);
+          if (!metadata || !parent || metadata.kind === 'field' || parent.kind === 'case' || parent.kind === 'field') throw new Error(labels.syncFailed);
           const parentSectionId = parent.kind === 'section' ? parent.id : null;
           if (metadata.kind === 'section') await onMoveSection(metadata.id, parentSectionId);
           if (metadata.kind === 'case') await onMoveCase(metadata.id, parentSectionId);
@@ -368,14 +409,14 @@ export function TestCaseMindmapView({
       if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
       const metadata = mind.currentNode?.nodeObj.metadata as SelectedNode | undefined;
       if (!metadata) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c' && metadata.kind !== 'suite') {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c' && (metadata.kind === 'section' || metadata.kind === 'case')) {
         event.preventDefault();
-        setClipboard({ mode: 'copy', node: metadata });
+        setClipboard({ mode: 'copy', node: metadata as ActionNode });
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'x' && metadata.kind !== 'suite') {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'x' && (metadata.kind === 'section' || metadata.kind === 'case')) {
         event.preventDefault();
-        setClipboard({ mode: 'cut', node: metadata });
+        setClipboard({ mode: 'cut', node: metadata as ActionNode });
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
@@ -390,16 +431,16 @@ export function TestCaseMindmapView({
         return;
       }
       if (event.metaKey || event.ctrlKey) return;
-      if (event.key.toLowerCase() === 'c' || event.key === 'Tab') {
+      if ((event.key.toLowerCase() === 'c' || event.key === 'Tab') && metadata.kind !== 'field') {
         event.preventDefault();
         onCreateCase(metadata.kind === 'section' ? metadata.id : metadata.sectionId ?? null);
-      } else if (event.key.toLowerCase() === 'm') {
+      } else if (event.key.toLowerCase() === 'm' && metadata.kind !== 'field') {
         event.preventDefault();
         setSelected(metadata);
         setSectionParentId(metadata.kind === 'section' ? metadata.id : metadata.sectionId ?? null);
         setName('');
         setDialog('section');
-      } else if (event.key === 'Enter') {
+      } else if (event.key === 'Enter' && metadata.kind !== 'field') {
         event.preventDefault();
         if (metadata.kind === 'section') {
           setSelected(metadata);
@@ -412,9 +453,12 @@ export function TestCaseMindmapView({
       } else if (event.key === ' ') {
         event.preventDefault();
         if (mind.currentNode) void mind.beginEdit(mind.currentNode);
+      } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind === 'field' && metadata.caseId && metadata.fieldKey) {
+        event.preventDefault();
+        void onUpdateCase(metadata.caseId, { [metadata.fieldKey]: '' });
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind !== 'suite') {
         event.preventDefault();
-        void onDeleteNode(metadata);
+        void onDeleteNode(metadata as ActionNode);
       }
     };
     mind.bus.addListener('selectNodes', select);
@@ -440,7 +484,7 @@ export function TestCaseMindmapView({
   };
 
   const openRenameDialog = () => {
-    if (!selected || selected.kind === 'suite') return;
+    if (!selected || selected.kind === 'suite' || selected.kind === 'field') return;
     setName(selected.title);
     setDialog('rename');
   };
@@ -489,11 +533,7 @@ export function TestCaseMindmapView({
     setSelected(pendingSelection);
     selectedRef.current = pendingSelection;
     if (pendingSelection) {
-      const nodeId = pendingSelection.kind === 'suite'
-        ? `suite:${pendingSelection.id}`
-        : pendingSelection.kind === 'section'
-          ? sectionNodeId(pendingSelection.id)
-          : caseNodeId(pendingSelection.id);
+      const nodeId = mindNodeId(pendingSelection);
       queueMicrotask(() => {
         const element = instanceRef.current?.findEle(nodeId);
         if (element) instanceRef.current?.selectNode(element);
@@ -539,7 +579,7 @@ export function TestCaseMindmapView({
               {selected.caseSeq && <p className="mt-1 text-sm text-muted-foreground">TC-{selected.caseSeq}</p>}
               {selected.priority && <p className="mt-1 text-sm capitalize text-muted-foreground">{selected.priority}</p>}
             </div>
-            {selected.kind === 'case' && <Button className="w-full" onClick={() => onOpenCase(selected.id)}><FileText className="mr-2 h-4 w-4" />{labels.edit}</Button>}
+            {(selected.kind === 'case' || selected.kind === 'field') && selectedCase && <Button className="w-full" onClick={() => onOpenCase(selectedCase.id)}><FileText className="mr-2 h-4 w-4" />{labels.edit}</Button>}
             {selectedCase && (
               <div className="space-y-3 border-t pt-4">
                 <div className="space-y-1.5">
@@ -584,13 +624,13 @@ export function TestCaseMindmapView({
                 {canWrite && <Button className="w-full" onClick={() => void saveCaseDetails()} disabled={saving || !isDirty}><FileText className="mr-2 h-4 w-4" />{labels.saveDetails}</Button>}
               </div>
             )}
-            {canWrite && selected.kind !== 'suite' && <Button variant="outline" className="w-full" onClick={openRenameDialog}><Edit className="mr-2 h-4 w-4" />{labels.rename}</Button>}
-            {canWrite && selected.kind !== 'suite' && <div className="grid grid-cols-2 gap-2">
-              <Button variant="outline" onClick={() => setClipboard({ mode: 'copy', node: selected })}><Copy className="mr-2 h-4 w-4" />{labels.copy}</Button>
-              <Button variant="outline" onClick={() => setClipboard({ mode: 'cut', node: selected })}><Scissors className="mr-2 h-4 w-4" />{labels.cut}</Button>
+            {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="outline" className="w-full" onClick={openRenameDialog}><Edit className="mr-2 h-4 w-4" />{labels.rename}</Button>}
+            {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => setClipboard({ mode: 'copy', node: selected as ActionNode })}><Copy className="mr-2 h-4 w-4" />{labels.copy}</Button>
+              <Button variant="outline" onClick={() => setClipboard({ mode: 'cut', node: selected as ActionNode })}><Scissors className="mr-2 h-4 w-4" />{labels.cut}</Button>
             </div>}
             {canWrite && clipboard && <Button variant="outline" className="w-full" onClick={() => void pasteClipboard(selected)}><ClipboardPaste className="mr-2 h-4 w-4" />{labels.paste}</Button>}
-            {canWrite && selected.kind !== 'suite' && <Button variant="destructive" className="w-full" onClick={() => void onDeleteNode(selected)}><Trash2 className="mr-2 h-4 w-4" />{labels.delete}</Button>}
+            {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="destructive" className="w-full" onClick={() => void onDeleteNode(selected as ActionNode)}><Trash2 className="mr-2 h-4 w-4" />{labels.delete}</Button>}
             {canWrite && <Button variant="outline" className="w-full" onClick={openSectionDialog}><FolderPlus className="mr-2 h-4 w-4" />{labels.addModule}</Button>}
             {canWrite && <Button variant="outline" className="w-full" onClick={() => onCreateCase(selected.kind === 'section' ? selected.id : selected.sectionId ?? null)}><Plus className="mr-2 h-4 w-4" />{labels.addCase}</Button>}
           </div>
