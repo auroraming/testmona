@@ -316,3 +316,33 @@ def test_evidence_rejects_secrets_and_external_artifact_urls(client):
         },
     )
     assert response.status_code == 422
+
+
+def test_user_and_runner_actions_are_audited_with_actor_metadata(client):
+    runner, token = _register_runner(client)
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Audit this run",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "passed"},
+    )
+    assert report.status_code == 200, report.text
+
+    with client.SessionLocal() as db:
+        from app import models
+
+        rows = db.query(models.AuditTrail).filter(
+            models.AuditTrail.project_id == client.project_id,
+            models.AuditTrail.entity_type == models.EntityType.TEST_EXECUTION,
+        ).order_by(models.AuditTrail.id).all()
+        task_rows = [row for row in rows if row.entity_id == task["id"]]
+        assert [row.action.value for row in task_rows] == ["create", "execute"]
+        assert task_rows[0].additional_metadata["actor_type"] == "user"
+        assert task_rows[1].additional_metadata["actor_type"] == "runner"
+        assert task_rows[1].additional_metadata["runner_id"] == runner["id"]

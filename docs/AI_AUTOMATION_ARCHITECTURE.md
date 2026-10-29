@@ -1,6 +1,6 @@
 # AI automation architecture baseline
 
-Status: first implementation slice; no Runner dispatch is enabled yet.
+Status: orchestration and evidence baseline implemented; no production Runner is enabled yet.
 
 ## Reuse decisions
 
@@ -29,6 +29,13 @@ lease, renew it through heartbeats, observe cancellation requests, and report a
 terminal result idempotently. Creating a task only queues durable intent and
 never marks a test as passed; independent assertions still determine outcomes.
 
+Authenticated MCP clients can create, list, inspect, and cancel tasks and read
+their evidence through the same REST/RBAC boundary. The internal Runner protocol
+is intentionally excluded from MCP so a personal user token cannot impersonate
+a worker. User actions and terminal Runner reports are written to the existing
+project audit feed; Runner events retain explicit Runner identity metadata and
+are attributed to the user who requested the task.
+
 ## Security invariants
 
 - Task operations are checked against project read/execute permissions.
@@ -38,8 +45,8 @@ never marks a test as passed; independent assertions still determine outcomes.
 - Queued tasks cancel immediately; active tasks enter `cancel_requested` until
   a Runner acknowledges cancellation.
 - Runner callbacks use expiring leases, and repeated equivalent terminal reports
-  are idempotent. Step evidence storage and audit events remain required before
-  a production Runner is enabled.
+  are idempotent. Step evidence and audit events are persisted before any
+  production Runner is enabled.
 
 ## Evidence contract
 

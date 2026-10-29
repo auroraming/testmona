@@ -311,4 +311,64 @@ def create_mcp_server(app_getter: Callable[[], FastAPI]) -> FastMCP:
             },
         )
 
+    @mcp.tool
+    async def create_ai_automation_task(
+        project_id: PositiveInt,
+        runner_type: Annotated[str, Field(pattern=r"^(web|mobile|api)$")],
+        goal: Annotated[str, Field(min_length=1, max_length=4000)],
+        execution_mode: Annotated[str, Field(pattern=r"^(ai|script)$")] = "ai",
+        test_case_id: PositiveInt | None = None,
+        test_run_id: PositiveInt | None = None,
+        environment_id: PositiveInt | None = None,
+        max_steps: Annotated[int, Field(ge=1, le=500)] = 50,
+        timeout_seconds: Annotated[int, Field(ge=30, le=86400)] = 900,
+        token_budget: PositiveInt | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> Any:
+        """Queue a project-scoped Web, Mobile, or API automation task for a registered Runner."""
+        return await api.request(
+            "POST",
+            "/ai-automation/tasks",
+            json_body={
+                "project_id": project_id,
+                "runner_type": runner_type,
+                "execution_mode": execution_mode,
+                "goal": goal,
+                "test_case_id": test_case_id,
+                "test_run_id": test_run_id,
+                "environment_id": environment_id,
+                "max_steps": max_steps,
+                "timeout_seconds": timeout_seconds,
+                "token_budget": token_budget,
+                "config": config or {},
+            },
+        )
+
+    @mcp.tool
+    async def list_ai_automation_tasks(
+        project_id: PositiveInt,
+        status: str | None = None,
+        limit: Annotated[int, Field(ge=1, le=200)] = 50,
+    ) -> Any:
+        """List AI automation tasks visible to the authenticated project user."""
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        if status:
+            params["status"] = status
+        return await api.request("GET", "/ai-automation/tasks", params=params)
+
+    @mcp.tool
+    async def get_ai_automation_task(task_id: PositiveInt) -> Any:
+        """Read one AI automation task and its budgets, status, and result summary."""
+        return await api.request("GET", f"/ai-automation/tasks/{task_id}")
+
+    @mcp.tool
+    async def cancel_ai_automation_task(task_id: PositiveInt) -> Any:
+        """Cancel a queued task or request cancellation from its active Runner."""
+        return await api.request("POST", f"/ai-automation/tasks/{task_id}/cancel")
+
+    @mcp.tool
+    async def list_ai_automation_evidence(task_id: PositiveInt) -> Any:
+        """List ordered step, assertion, log, screenshot, trace, and network evidence for a task."""
+        return await api.request("GET", f"/ai-automation/tasks/{task_id}/evidence")
+
     return mcp

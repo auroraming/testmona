@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import logging
 import secrets
 
 from fastapi import Depends, Header, HTTPException, Path, Query, Response
@@ -18,6 +19,34 @@ from ..database import get_db
 
 TERMINAL_STATUSES = {"cancelled", "passed", "failed", "blocked", "timed_out"}
 LEASE_SECONDS = 90
+logger = logging.getLogger(__name__)
+
+
+def _audit_task_action(
+    db: Session,
+    *,
+    user_id: int,
+    action: str,
+    task_id: int | None,
+    project_id: int,
+    description: str,
+    metadata: dict | None = None,
+) -> None:
+    """Write AI automation activity through the existing project audit feed."""
+    try:
+        from ..services.audit_service import get_audit_service
+
+        get_audit_service(db).log_action(
+            user_id=user_id,
+            action=action,
+            entity_type="test_execution",
+            entity_id=task_id,
+            project_id=project_id,
+            description=description,
+            additional_metadata={"automation": "ai", **(metadata or {})},
+        )
+    except Exception:
+        logger.exception("Failed to audit AI automation action")
 
 
 def _token_hash(token: str) -> str:
@@ -98,6 +127,15 @@ def register_ai_automation_routes(app) -> None:
             db.rollback()
             raise HTTPException(status_code=409, detail="A runner with this name already exists in the project") from exc
         db.refresh(runner)
+        _audit_task_action(
+            db,
+            user_id=current_user.id,
+            action="create",
+            task_id=None,
+            project_id=runner.project_id,
+            description=f"AI automation runner '{runner.name}' registered",
+            metadata={"actor_type": "user", "runner_id": runner.id, "runner_type": runner.runner_type},
+        )
         data = schemas.AIAutomationRunner.model_validate(runner).model_dump()
         return {**data, "token": token}
 
@@ -127,6 +165,15 @@ def register_ai_automation_routes(app) -> None:
         runner.status = "offline"
         db.commit()
         db.refresh(runner)
+        _audit_task_action(
+            db,
+            user_id=current_user.id,
+            action="update",
+            task_id=None,
+            project_id=runner.project_id,
+            description=f"AI automation runner '{runner.name}' token rotated",
+            metadata={"actor_type": "user", "runner_id": runner.id},
+        )
         data = schemas.AIAutomationRunner.model_validate(runner).model_dump()
         return {**data, "token": token}
 
@@ -141,6 +188,15 @@ def register_ai_automation_routes(app) -> None:
         runner.status = "disabled"
         db.commit()
         db.refresh(runner)
+        _audit_task_action(
+            db,
+            user_id=current_user.id,
+            action="delete",
+            task_id=None,
+            project_id=runner.project_id,
+            description=f"AI automation runner '{runner.name}' disabled",
+            metadata={"actor_type": "user", "runner_id": runner.id},
+        )
         return runner
 
     @app.post("/ai-automation/tasks", response_model=schemas.AIAutomationTask, status_code=201)
@@ -160,6 +216,15 @@ def register_ai_automation_routes(app) -> None:
         db.add(task)
         db.commit()
         db.refresh(task)
+        _audit_task_action(
+            db,
+            user_id=current_user.id,
+            action="create",
+            task_id=task.id,
+            project_id=task.project_id,
+            description=f"AI automation {task.runner_type} task queued",
+            metadata={"actor_type": "user", "execution_mode": task.execution_mode},
+        )
         return task
 
     @app.get("/ai-automation/tasks", response_model=list[schemas.AIAutomationTask])
@@ -221,6 +286,15 @@ def register_ai_automation_routes(app) -> None:
             task.status = "cancel_requested"
         db.commit()
         db.refresh(task)
+        _audit_task_action(
+            db,
+            user_id=current_user.id,
+            action="update",
+            task_id=task.id,
+            project_id=task.project_id,
+            description=f"AI automation task cancellation requested ({task.status})",
+            metadata={"actor_type": "user"},
+        )
         return task
 
     @app.post("/internal/ai-automation/claim", response_model=schemas.AIAutomationTaskLease | None)
@@ -309,6 +383,21 @@ def register_ai_automation_routes(app) -> None:
         task.completed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(task)
+        _audit_task_action(
+            db,
+            user_id=task.requested_by,
+            action="execute",
+            task_id=task.id,
+            project_id=task.project_id,
+            description=f"AI automation runner reported task {payload.status}",
+            metadata={
+                "actor_type": "runner",
+                "runner_id": runner.id,
+                "runner_name": runner.name,
+                "attributed_user_id": task.requested_by,
+                "attempt_count": task.attempt_count,
+            },
+        )
         return task
 
     @app.post(

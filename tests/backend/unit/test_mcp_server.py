@@ -36,6 +36,11 @@ EXPECTED_TOOLS = {
     "list_test_case_mindmaps",
     "preview_openapi_test_cases",
     "commit_openapi_test_cases",
+    "create_ai_automation_task",
+    "list_ai_automation_tasks",
+    "get_ai_automation_task",
+    "cancel_ai_automation_task",
+    "list_ai_automation_evidence",
 }
 
 
@@ -100,6 +105,33 @@ async def test_openapi_preview_is_multipart_and_commit_defaults_to_skip(monkeypa
     assert calls[0][2]["data"] == {"project_id": "4"}
     assert calls[0][2]["files"]["file"][0] == "api.yaml"
     assert calls[1][2]["json_body"]["duplicate_mode"] == "skip"
+
+
+@pytest.mark.asyncio
+async def test_ai_automation_tools_reuse_scoped_task_routes(monkeypatch):
+    calls = []
+
+    async def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_module.TestMonaASGIClient, "request", fake_request)
+    server = mcp_module.create_mcp_server(lambda: app)
+    create = await server.get_tool("create_ai_automation_task")
+    evidence = await server.get_tool("list_ai_automation_evidence")
+
+    await create.run({
+        "project_id": 4,
+        "runner_type": "api",
+        "goal": "Verify health endpoint",
+        "token_budget": 1000,
+    })
+    await evidence.run({"task_id": 9})
+
+    assert calls[0][0:2] == ("POST", "/ai-automation/tasks")
+    assert calls[0][2]["json_body"]["runner_type"] == "api"
+    assert calls[0][2]["json_body"]["token_budget"] == 1000
+    assert calls[1] == ("GET", "/ai-automation/tasks/9/evidence", {})
 
 
 @pytest.mark.asyncio

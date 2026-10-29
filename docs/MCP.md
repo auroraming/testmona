@@ -68,6 +68,18 @@ and do not commit a real token to the repository.
 Preview and commit are intentionally separate so a client can show generated
 test cases for human review before creating records.
 
+### AI automation tasks
+
+- `create_ai_automation_task` queues a Web, Mobile, or API task for a registered project Runner.
+- `list_ai_automation_tasks`
+- `get_ai_automation_task`
+- `cancel_ai_automation_task`
+- `list_ai_automation_evidence` returns ordered steps, assertions, logs, screenshots, traces, and network evidence.
+
+These tools reuse the task REST API and project permissions. Runner registration,
+claim, heartbeat, evidence upload, and result reporting stay on the internal
+Runner protocol and are never exposed through a user's MCP token.
+
 ## Sharing with other users
 
 Deploy TestMona on an HTTPS address reachable by those users. Each user creates
