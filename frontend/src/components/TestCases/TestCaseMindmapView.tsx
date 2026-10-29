@@ -32,6 +32,7 @@ type CaseStepDraft = { step_number: number; action: string; expected_result: str
 type HistoryCommand = { undo: () => Promise<void>; redo: () => Promise<void> };
 
 const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '', expected_result: '' };
+const CASE_BATCH_SIZE = 500;
 
 type Props = {
   suiteId: number;
@@ -68,6 +69,7 @@ type Props = {
     unsavedChanges: string;
     unsavedChangesDescription: string;
     discard: string;
+    loadMore: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -138,6 +140,7 @@ export function TestCaseMindmapView({
   const [pendingSelection, setPendingSelection] = useState<SelectedNode | null>(null);
   const [guardOpen, setGuardOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [visibleCaseLimit, setVisibleCaseLimit] = useState(CASE_BATCH_SIZE);
   const [clipboard, setClipboard] = useState<{ mode: 'copy' | 'cut'; node: ActionNode } | null>(null);
   const clipboardRef = useRef<typeof clipboard>(null);
   const selectedRef = useRef<SelectedNode | null>(null);
@@ -159,9 +162,11 @@ export function TestCaseMindmapView({
     structuralIndexRef.current = 0;
     setStructuralVersion((current) => current + 1);
   }, [suiteId]);
+  useEffect(() => { setVisibleCaseLimit(CASE_BATCH_SIZE); }, [suiteId, testCases]);
 
   const selectedCaseId = selected?.kind === 'case' ? selected.id : (selected?.kind === 'field' || selected?.kind === 'step') ? selected.caseId : undefined;
   const selectedCase = selectedCaseId ? testCases.find((testCase) => testCase.id === selectedCaseId) : undefined;
+  const visibleTestCases = useMemo(() => testCases.slice(0, visibleCaseLimit), [testCases, visibleCaseLimit]);
 
   useEffect(() => {
     if (!selectedCase) return;
@@ -285,7 +290,7 @@ export function TestCaseMindmapView({
 
   const data = useMemo<MindElixirData>(() => {
     const casesBySection = new Map<number | null, TestCase[]>();
-    testCases.forEach((testCase) => {
+    visibleTestCases.forEach((testCase) => {
       const key = testCase.section_id ?? null;
       casesBySection.set(key, [...(casesBySection.get(key) || []), testCase]);
     });
@@ -385,11 +390,11 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, testCases]);
+  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
 
   const dataSignature = useMemo(
-    () => JSON.stringify([suiteId, sections, stepsByCase, testCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
-    [sections, stepsByCase, suiteId, testCases],
+    () => JSON.stringify([suiteId, sections, stepsByCase, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
+    [sections, stepsByCase, suiteId, visibleTestCases],
   );
 
   useEffect(() => {
@@ -689,6 +694,7 @@ export function TestCaseMindmapView({
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
           {canWrite && <Button size="sm" variant="ghost" onClick={() => onCreateCase(selected?.kind === 'section' ? selected.id : null)}><Plus className="mr-1 h-4 w-4" />{labels.addCase}</Button>}
+          {visibleCaseLimit < testCases.length && <Button size="sm" variant="ghost" onClick={() => setVisibleCaseLimit((current) => Math.min(current + CASE_BATCH_SIZE, testCases.length))}>{labels.loadMore} ({Math.min(visibleCaseLimit, testCases.length)}/{testCases.length})</Button>}
         </div>
       </div>
 

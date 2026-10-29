@@ -4415,6 +4415,7 @@ export function TestCases() {
                 unsavedChanges: t('unsavedChanges'),
                 unsavedChangesDescription: t('mindmapUnsavedChangesDescription'),
                 discard: t('discard'),
+                loadMore: t('loadMore'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
