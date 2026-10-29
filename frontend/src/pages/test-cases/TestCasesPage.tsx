@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { aiManagerAPI, AIManagerStatus, api, getApiErrorMessage, testCasesAPI, testSuitesAPI, sectionsAPI, importExportAPI, userPreferencesAPI, requirementsAPI, testRunsAPI, testResultsAPI, sharedStepsAPI } from '@/lib/api';
+import { getTestTypeLabel } from '@/lib/testTypeLabels';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -98,6 +99,8 @@ import {
   Sparkles,
   ListChecks,
   Info,
+  List,
+  Network,
 } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useDateFormat } from '@/hooks/useDateFormat';
@@ -116,6 +119,7 @@ import { parseSearchQuery, testCaseMatchesQuery } from '@/components/TestCases/s
 import { SavedFilters } from '@/components/SavedFilters';
 import { BulkEditTestCasesDialog } from '@/components/BulkEditTestCasesDialog';
 import { OpenAPIImportDialog } from '@/components/OpenAPIImportDialog';
+import { TestCaseMindmapView } from '@/components/TestCases/TestCaseMindmapView';
 
 const CUSTOM_FIELD_FILTER_ALL = 'all';
 const CUSTOM_FIELD_FILTER_ANY_VALUE = '__any__';
@@ -175,6 +179,10 @@ export function TestCases() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'mindmap'>('list');
+  const [recycleBinOpen, setRecycleBinOpen] = useState(false);
+  const [deletedTestCases, setDeletedTestCases] = useState<TestCase[]>([]);
+  const [recycleBinLoading, setRecycleBinLoading] = useState(false);
 
   // Consolidated form state
   const [testCaseForm, setTestCaseForm] = useState<{
@@ -482,7 +490,7 @@ export function TestCases() {
           .filter((t: any) => t.is_active)
           .map((testType: any) => ({
             value: testType.name.toLowerCase(),
-            label: testType.name
+            label: getTestTypeLabel(testType.name, t)
           }));
 
         setPriorityOptions(priorityOptions);
@@ -511,7 +519,7 @@ export function TestCases() {
     };
 
     loadEnums();
-  }, [projectId]);
+  }, [projectId, t]);
 
   // Function to create a new test type inline
   const handleCreateTestType = async () => {
@@ -533,7 +541,7 @@ export function TestCases() {
         .filter((t: any) => t.is_active)
         .map((testType: any) => ({
           value: testType.name.toLowerCase(),
-          label: testType.name
+          label: getTestTypeLabel(testType.name, t)
         }));
       setTestTypeOptions(testTypeOptions);
       setTestTypes(testTypeOptions.map((option) => option.value));
@@ -2809,6 +2817,202 @@ export function TestCases() {
     }
   };
 
+  const mindmapSections = useMemo(
+    () => mockSections.filter((section) => section.test_suite_id === currentTestSuiteId),
+    [currentTestSuiteId, mockSections],
+  );
+
+  const mindmapCases = useMemo(
+    () => filteredAndSortedTestCases.filter((testCase) => testCase.test_suite_id === currentTestSuiteId),
+    [currentTestSuiteId, filteredAndSortedTestCases],
+  );
+
+  const currentSuiteName = testSuites.find((suite) => suite.id === currentTestSuiteId)?.name || t('testCasesTitle');
+
+  const createMindmapSection = async (parentSectionId: number | null, name: string) => {
+    if (!currentTestSuiteId) return;
+    try {
+      await sectionsAPI.create({
+        name,
+        test_suite_id: currentTestSuiteId,
+        parent_section_id: parentSectionId,
+      });
+      await loadSections();
+      toast({ title: t('success'), description: t('sectionCreatedSuccessfully', { name }) });
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToCreateSection')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const renameMindmapSection = async (sectionId: number, name: string) => {
+    try {
+      await sectionsAPI.update(sectionId, { name });
+      await loadSections();
+      toast({ title: t('success'), description: t('sectionUpdatedSuccessfully', { name }) });
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToCreateSection')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const renameMindmapCase = async (testCaseId: number, title: string) => {
+    try {
+      const current = apiTestCases.find((testCase) => testCase.id === testCaseId);
+      await testCasesAPI.update(testCaseId, { title, expected_updated_at: current?.updated_at });
+      await loadTestCases();
+      toast({ title: t('success'), description: t('testCaseUpdatedSuccessfully') });
+    } catch (error) {
+      await loadTestCases();
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const moveMindmapSection = async (sectionId: number, parentSectionId: number | null) => {
+    try {
+      await sectionsAPI.update(sectionId, { parent_section_id: parentSectionId });
+      await loadSections();
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToMoveSection')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const moveMindmapCase = async (testCaseId: number, sectionId: number | null) => {
+    try {
+      const current = apiTestCases.find((testCase) => testCase.id === testCaseId);
+      await testCasesAPI.update(testCaseId, { section_id: sectionId, expected_updated_at: current?.updated_at });
+      await Promise.all([loadTestCases(), loadSections()]);
+    } catch (error) {
+      await loadTestCases();
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToMoveTestCases')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const updateMindmapCase = async (
+    testCaseId: number,
+    patch: Partial<Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>>,
+  ) => {
+    try {
+      const current = apiTestCases.find((testCase) => testCase.id === testCaseId);
+      await testCasesAPI.update(testCaseId, { ...patch, expected_updated_at: current?.updated_at });
+      await loadTestCases();
+      toast({ title: t('success'), description: t('testCaseUpdatedSuccessfully') });
+    } catch (error) {
+      await loadTestCases();
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const createMindmapCase = (sectionId: number | null) => {
+    if (!currentTestSuiteId) return;
+    setSelectedTestSuite(sectionId ? String(sectionId) : getUnsectionedSelectionValue(currentTestSuiteId));
+    handleOpenModal();
+  };
+
+  const openRecycleBin = async () => {
+    if (!currentProjectId) return;
+    setRecycleBinOpen(true);
+    setRecycleBinLoading(true);
+    try {
+      setDeletedTestCases(await testCasesAPI.getRecycleBin(currentProjectId, currentTestSuiteId || undefined));
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('operationFailed')), variant: 'destructive' });
+    } finally {
+      setRecycleBinLoading(false);
+    }
+  };
+
+  const restoreTestCase = async (testCaseId: number) => {
+    try {
+      await testCasesAPI.restore(testCaseId);
+      setDeletedTestCases((current) => current.filter((testCase) => testCase.id !== testCaseId));
+      await Promise.all([loadTestCases(), loadSections()]);
+      toast({ title: t('success'), description: t('restoredSuccessfully') });
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('operationFailed')), variant: 'destructive' });
+    }
+  };
+
+  const copyMindmapCase = async (source: TestCase, sectionId: number | null) => {
+    const steps = source.is_multistep
+      ? await testCasesAPI.getSteps(source.id).catch(() => source.test_steps || [])
+      : undefined;
+    await testCasesAPI.create({
+      title: `${source.title} (${t('copy')})`,
+      description: source.description,
+      reference: source.reference,
+      tags: source.tags?.map((tag) => tag.name) || [],
+      preconditions: source.preconditions,
+      steps: source.steps,
+      expected_result: source.expected_result,
+      test_type: source.test_type,
+      priority: source.priority,
+      status: source.status,
+      test_suite_id: currentTestSuiteId,
+      section_id: sectionId,
+      is_multistep: source.is_multistep,
+      test_steps: steps,
+    });
+  };
+
+  const copyMindmapNode = async (
+    node: { kind: 'suite' | 'section' | 'case'; id: number; title: string },
+    targetSectionId: number | null,
+  ) => {
+    if (!currentTestSuiteId || node.kind === 'suite') return;
+    try {
+      if (node.kind === 'case') {
+        const source = apiTestCases.find((testCase) => testCase.id === node.id);
+        if (!source) throw new Error(t('testCaseNotFound'));
+        await copyMindmapCase(source, targetSectionId);
+      } else {
+        const findSection = (items: Section[], id: number): Section | undefined => {
+          for (const item of items) {
+            if (Number(item.id) === id) return item;
+            const found = findSection(item.children || [], id);
+            if (found) return found;
+          }
+          return undefined;
+        };
+        const cloneSection = async (source: Section, parentId: number | null, isRoot = false) => {
+          const created = await sectionsAPI.create({
+            name: isRoot ? `${source.name} (${t('copy')})` : source.name,
+            test_suite_id: currentTestSuiteId,
+            parent_section_id: parentId,
+          });
+          const directCases = apiTestCases.filter((testCase) => testCase.section_id === Number(source.id));
+          for (const testCase of directCases) await copyMindmapCase(testCase, created.id);
+          for (const child of source.children || []) await cloneSection(child, created.id);
+        };
+        const source = findSection(mindmapSections, node.id);
+        if (!source) throw new Error(t('sectionNotFound'));
+        await cloneSection(source, targetSectionId, true);
+      }
+      await Promise.all([loadTestCases(), loadSections()]);
+      toast({ title: t('success'), description: t('copiedSuccessfully') });
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('operationFailed')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
+  const deleteMindmapNode = async (node: { kind: 'suite' | 'section' | 'case'; id: number; title: string }) => {
+    if (node.kind === 'suite' || !window.confirm(`${t('delete')} “${node.title}”?`)) return;
+    try {
+      if (node.kind === 'case') await testCasesAPI.delete(node.id);
+      else await sectionsAPI.delete(node.id);
+      await Promise.all([loadTestCases(), loadSections()]);
+      toast({ title: t('success'), description: t('deletedSuccessfully') });
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('operationFailed')), variant: 'destructive' });
+      throw error;
+    }
+  };
+
   return (
     <div className="space-y-6" dir={isRTL ? 'rtl' : 'ltr'}>
       {/* Page header */}
@@ -3944,6 +4148,28 @@ export function TestCases() {
                   resultLabel={t('results')}
                 />
               </div>
+              <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                  onClick={() => setViewMode('list')}
+                >
+                  <List className="mr-2 h-4 w-4" />{t('listView')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={viewMode === 'mindmap' ? 'secondary' : 'ghost'}
+                  onClick={() => setViewMode('mindmap')}
+                  disabled={!currentTestSuiteId}
+                >
+                  <Network className="mr-2 h-4 w-4" />{t('testCaseMindmapView')}
+                </Button>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={() => void openRecycleBin()} disabled={!currentTestSuiteId}>
+                <Trash2 className="mr-2 h-4 w-4" />{t('recycleBin')}
+              </Button>
               {selectedTestCases.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 dark:border-blue-900 dark:bg-blue-950/40">
                   <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
@@ -4102,6 +4328,51 @@ export function TestCases() {
             </div>
           </div>
 
+          {viewMode === 'mindmap' && currentTestSuiteId ? (
+            <TestCaseMindmapView
+              suiteId={currentTestSuiteId}
+              suiteName={currentSuiteName}
+              sections={mindmapSections}
+              testCases={mindmapCases}
+              canWrite={canWrite}
+              priorityOptions={priorityOptions}
+              labels={{
+                addModule: t('mindmapAddModule'),
+                addCase: t('addNewTestCase'),
+                edit: t('editTestCase'),
+                fit: t('mindmapFitView'),
+                fullscreen: t('fullscreen'),
+                rename: t('rename'),
+                cancel: t('cancel'),
+                save: t('save'),
+                noCases: t('noTestCasesYet'),
+                syncing: t('mindmapSyncing'),
+                syncFailed: t('mindmapSyncFailed'),
+                description: t('testCaseDescription'),
+                preconditions: t('fieldPreconditions'),
+                steps: t('fieldSteps'),
+                expectedResult: t('fieldExpectedResult'),
+                saveDetails: t('mindmapSaveDetails'),
+                structuredStepsHint: t('mindmapStructuredStepsHint'),
+                priority: t('priority'),
+                copy: t('copy'),
+                cut: t('cut'),
+                paste: t('paste'),
+                delete: t('delete'),
+              }}
+              onCreateSection={createMindmapSection}
+              onCreateCase={createMindmapCase}
+              onRenameSection={renameMindmapSection}
+              onRenameCase={renameMindmapCase}
+              onMoveSection={moveMindmapSection}
+              onMoveCase={moveMindmapCase}
+              onUpdateCase={updateMindmapCase}
+              onCopyNode={copyMindmapNode}
+              onDeleteNode={deleteMindmapNode}
+              onOpenCase={(testCaseId) => navigate(getTestCaseDetailUrl(testCaseId))}
+            />
+          ) : (
+          <>
           {/* Test Cases Table */}
           <Card className="overflow-hidden rounded-lg border-gray-200 dark:border-gray-800">
             <CardContent className="p-0">
@@ -4286,8 +4557,28 @@ export function TestCases() {
               </Button>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
+
+      <Dialog open={recycleBinOpen} onOpenChange={setRecycleBinOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>{t('recycleBin')}</DialogTitle></DialogHeader>
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+            {recycleBinLoading ? (
+              <div className="flex justify-center p-8"><Loader2 className="h-5 w-5 animate-spin" /></div>
+            ) : deletedTestCases.length === 0 ? (
+              <p className="p-8 text-center text-sm text-muted-foreground">{t('recycleBinEmpty')}</p>
+            ) : deletedTestCases.map((testCase) => (
+              <div key={testCase.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="min-w-0"><p className="truncate font-medium">{testCase.title}</p><p className="text-xs text-muted-foreground">{testCase.project_seq ? `TC-${testCase.project_seq}` : `#${testCase.id}`}</p></div>
+                <Button size="sm" variant="outline" onClick={() => void restoreTestCase(testCase.id)}><RefreshCw className="mr-2 h-4 w-4" />{t('restore')}</Button>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
       </DndContext>
 
       {/* Revisions Dialog */}

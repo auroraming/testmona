@@ -1,32 +1,39 @@
-# TestMona MCP Server
+# TestMona Remote MCP
 
-TestMona includes a local stdio MCP server that exposes test-case directories,
-mind-map links, and OpenAPI-to-test-case conversion to MCP clients. The MCP
-server calls the normal TestMona HTTP API, so project permissions, viewer
-read-only rules, validation, and audit behavior remain in force.
+TestMona exposes a FastMCP Streamable HTTP endpoint at:
 
-## Prerequisites
+```text
+https://your-testmona-host/mcp
+```
 
-1. Start the TestMona backend.
+It uses the same personal API tokens as the REST API. MCP tools re-enter the
+normal TestMona API in-process, so project permissions, viewer read-only rules,
+validation, and audit behavior remain in force. There is no stdio server.
+
+## Connect a client
+
+1. Start or deploy the TestMona backend.
 2. In TestMona, open **API tokens** and create a personal token.
-3. Add the server to your MCP client. Replace the repository path and token:
+3. Add the remote URL to an MCP client and send the token as a Bearer token.
+
+Generic configuration:
 
 ```json
 {
   "mcpServers": {
     "testmona": {
-      "command": "/absolute/path/to/testmona/backend/venv/bin/python",
-      "args": ["/absolute/path/to/testmona/backend/mcp_server.py"],
-      "env": {
-        "TESTMONA_URL": "http://127.0.0.1:8000",
-        "TESTMONA_API_TOKEN": "tmona_replace_with_your_token"
+      "url": "https://your-testmona-host/mcp",
+      "headers": {
+        "Authorization": "Bearer tmona_replace_with_your_token"
       }
     }
   }
 }
 ```
 
-Treat the token like a password. Do not commit a real token to the repository.
+Clients with a dedicated API-token field can use the same URL and paste only
+the `tmona_...` value into that field. Do not put tokens in the URL query string
+and do not commit a real token to the repository.
 
 ## Available tools
 
@@ -55,22 +62,21 @@ Treat the token like a password. Do not commit a real token to the repository.
 
 ### OpenAPI conversion
 
-- `preview_openapi_test_cases` parses OpenAPI 3.x JSON/YAML text without writing data.
-- `commit_openapi_test_cases` writes only reviewed drafts to a selected suite and optional directory.
+- `preview_openapi_test_cases` parses OpenAPI/Swagger JSON or YAML without writing data.
+- `commit_openapi_test_cases` writes reviewed drafts to a selected suite and optional directory.
 
-The preview and commit steps are intentionally separate so an MCP client can
-show generated test cases for human review before creating records.
+Preview and commit are intentionally separate so a client can show generated
+test cases for human review before creating records.
 
-## Environment variables
+## Sharing with other users
 
-| Variable | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `TESTMONA_API_TOKEN` | Yes | — | Personal `tmona_...` Bearer token |
-| `TESTMONA_URL` | No | `http://127.0.0.1:8000` | TestMona backend base URL |
+Deploy TestMona on an HTTPS address reachable by those users. Each user creates
+their own personal API token and configures the same `/mcp` URL. Never share one
+token across users: permissions and audit identity come from the token owner.
 
 ## Troubleshooting
 
-- `TESTMONA_API_TOKEN is required`: configure the token in the MCP client's server environment.
-- HTTP 401: the token is invalid or revoked.
-- HTTP 403: the token owner lacks the required project permission, or is a read-only viewer attempting a write.
-- Connection failure: verify the backend is running and `TESTMONA_URL` is reachable from the MCP client.
+- HTTP 401: the token is missing, invalid, expired, revoked, or belongs to a disabled user.
+- HTTP 403: the token owner lacks the project permission or is a read-only viewer attempting a write.
+- HTTP 404: confirm the URL ends in `/mcp` and the deployed backend includes the FastMCP dependency.
+- Connection failure: confirm the HTTPS endpoint is reachable from the MCP client.

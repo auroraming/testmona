@@ -15,6 +15,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { getStandardDescription, getTestTypeLabel } from '@/lib/testTypeLabels';
 import { useTranslation } from '@/hooks/useTranslation';
 import { SettingsSection, SettingsEmptyState, SettingsErrorState, SettingsCardsSkeleton } from '../components/SettingsPrimitives';
 import { TestType, TestTypeForm, emptyTestTypeForm } from '../types';
@@ -270,8 +271,10 @@ export function TestTypesSection({ data, canManage }: { data: TestManagementData
                 </DropdownMenu>
               </div>
 
-              <h4 className="mb-1 truncate text-lg font-semibold text-foreground">{type.name}</h4>
-              <p className="mb-4 line-clamp-2 min-h-[2.5rem] text-sm text-muted-foreground">{type.description || t('noDescriptionProvided')}</p>
+              <h4 className="mb-1 truncate text-lg font-semibold text-foreground">{getTestTypeLabel(type.name, t)}</h4>
+              <p className="mb-4 line-clamp-2 min-h-[2.5rem] text-sm text-muted-foreground">
+                {type.description ? getStandardDescription(type.description, t) : t('noDescriptionProvided')}
+              </p>
 
               <div className="mt-auto flex items-center justify-between border-t border-border/60 pt-3 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">

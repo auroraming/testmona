@@ -32,6 +32,7 @@ import { CustomFieldDefinition } from '@/types';
 import { useProjectStore } from '@/stores/projectStore';
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
+import { getTestTypeLabel } from '@/lib/testTypeLabels';
 
 type TestCasePriority = 'low' | 'medium' | 'high' | 'critical';
 type TestCaseStatus = 'active' | 'inactive' | 'archived';
@@ -375,21 +376,21 @@ export function TestCaseEdit() {
           .filter((definition: any) => definition?.name)
           .map((definition: any) => ({
             value: String(definition.name).toLowerCase(),
-            label: String(definition.name),
+            label: getTestTypeLabel(String(definition.name), t),
           }));
 
         setTestTypeOptions(options);
       } catch (error) {
         console.error('Failed to load test type definitions:', error);
         setTestTypeOptions([
-          { value: 'manual', label: t('manual') },
-          { value: 'automated', label: t('automated') },
-          { value: 'smoke', label: t('smoke') },
-          { value: 'regression', label: 'Regression' },
-          { value: 'integration', label: 'Integration' },
-          { value: 'security', label: t('security') },
-          { value: 'performance', label: t('performance') },
-          { value: 'usability', label: 'Usability' },
+          { value: 'manual', label: t('testTypeManual') },
+          { value: 'automated', label: t('testTypeAutomated') },
+          { value: 'smoke', label: t('testTypeSmoke') },
+          { value: 'regression', label: t('testTypeRegression') },
+          { value: 'integration', label: t('testTypeIntegration') },
+          { value: 'security', label: t('testTypeSecurity') },
+          { value: 'performance', label: t('testTypePerformance') },
+          { value: 'usability', label: t('testTypeUsability') },
         ]);
       } finally {
         setTestTypesLoading(false);

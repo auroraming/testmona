@@ -16,6 +16,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { getPriorityLabel, getStandardDescription } from '@/lib/testTypeLabels';
 import { useTranslation } from '@/hooks/useTranslation';
 import { SettingsSection, SettingsEmptyState, SettingsErrorState } from '../components/SettingsPrimitives';
 import { Priority, PriorityForm, emptyPriorityForm } from '../types';
@@ -272,14 +273,16 @@ export function PrioritiesSection({ data, canManage }: { data: TestManagementDat
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h4 className="truncate font-semibold text-foreground">{priority.name}</h4>
+                  <h4 className="truncate font-semibold text-foreground">{getPriorityLabel(priority.name, t)}</h4>
                   {priority.is_default && (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
                       <Star className="h-3 w-3 fill-current" />{t('default')}
                     </span>
                   )}
                 </div>
-                <p className="truncate text-sm text-muted-foreground">{priority.description || t('noDescriptionProvided')}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {priority.description ? getStandardDescription(priority.description, t) : t('noDescriptionProvided')}
+                </p>
               </div>
 
               <div className="hidden w-44 shrink-0 sm:block">

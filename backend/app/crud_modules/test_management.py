@@ -344,6 +344,8 @@ def update_test_case(db: Session, test_case_id: int, test_case: TestCaseUpdate):
     db_test_case = db.query(TestCase).filter(TestCase.id == test_case_id).first()
     if db_test_case:
         data = test_case.model_dump(exclude_unset=True)
+        # Request-only optimistic concurrency token; never copy it onto the ORM row.
+        data.pop('expected_updated_at', None)
         # Tags are a relationship, not a scalar column — resolve names → Tag rows.
         # Presence of the key (even as []) means "set to exactly this"; absence
         # (exclude_unset) leaves the existing tags untouched.

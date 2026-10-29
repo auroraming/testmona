@@ -14,6 +14,7 @@ import {
   Edit3
 } from 'lucide-react';
 import { useDateFormat } from '@/hooks/useDateFormat';
+import { useTranslation } from '@/hooks/useTranslation';
 import { TestCaseVersion, VersionComparisonResponse } from '../../types/versioning';
 
 interface VersionComparisonProps {
@@ -24,14 +25,14 @@ interface VersionComparisonProps {
   onRefresh?: () => void;
 }
 
-const fieldLabels: Record<string, string> = {
-  title: 'Title',
-  test_type: 'Test Type',
-  preconditions: 'Preconditions',
-  steps: 'Steps',
-  expected_result: 'Expected Result',
-  priority: 'Priority',
-  tags: 'Tags'
+const fieldLabelKeys: Record<string, string> = {
+  title: 'title',
+  test_type: 'testType',
+  preconditions: 'preconditions',
+  steps: 'steps',
+  expected_result: 'expectedResult',
+  priority: 'priority',
+  tags: 'tags'
 };
 
 export const VersionComparison: React.FC<VersionComparisonProps> = ({
@@ -44,6 +45,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'side-by-side' | 'unified'>('side-by-side');
+  const { t } = useTranslation();
 
   const handleRefreshComparison = async () => {
     if (!onRefresh) return;
@@ -53,7 +55,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
       setError(null);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh comparison');
+      setError(err instanceof Error ? err.message : t('failedRefreshComparison'));
     } finally {
       setLoading(false);
     }
@@ -63,7 +65,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
   const formatDate = (dateString: string) => formatRelative(dateString);
 
   const renderFieldDiff = (fieldName: string, diff: { from: any; to: any; diff?: string }) => {
-    const label = fieldLabels[fieldName] || fieldName;
+    const label = fieldLabelKeys[fieldName] ? t(fieldLabelKeys[fieldName]) : fieldName;
     const isCustomField = fieldName.startsWith('custom_');
     const displayName = isCustomField ? fieldName.replace('custom_', '') : label;
 
@@ -72,7 +74,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
         <div className="flex items-center justify-between">
           <h4 className="font-medium">{displayName}</h4>
           <Badge variant="outline" className="text-xs">
-            {isCustomField ? 'Custom Field' : 'Standard Field'}
+            {isCustomField ? t('customFieldSingular') : t('standardField')}
           </Badge>
         </div>
 
@@ -81,26 +83,26 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm font-medium text-red-600">
                 <Minus className="h-4 w-4" />
-                From ({fromVersion.version_string})
+                {t('fromVersionShort', { version: fromVersion.version_string })}
               </div>
               <div className="bg-red-50 border border-red-200 rounded p-3">
                 {diff.from ? (
                   <pre className="whitespace-pre-wrap text-sm">{diff.from}</pre>
                 ) : (
-                  <span className="text-gray-500 italic">Empty</span>
+                  <span className="text-gray-500 italic">{t('empty')}</span>
                 )}
               </div>
             </div>
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm font-medium text-green-600">
                 <Plus className="h-4 w-4" />
-                To ({toVersion.version_string})
+                {t('toVersionShort', { version: toVersion.version_string })}
               </div>
               <div className="bg-green-50 border border-green-200 rounded p-3">
                 {diff.to ? (
                   <pre className="whitespace-pre-wrap text-sm">{diff.to}</pre>
                 ) : (
-                  <span className="text-gray-500 italic">Empty</span>
+                  <span className="text-gray-500 italic">{t('empty')}</span>
                 )}
               </div>
             </div>
@@ -114,11 +116,11 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
                 <div className="space-y-2">
                   <div className="text-red-600">
                     <span className="font-medium">- </span>
-                    <span>{diff.from || '(empty)'}</span>
+                    <span>{diff.from || `(${t('empty')})`}</span>
                   </div>
                   <div className="text-green-600">
                     <span className="font-medium">+ </span>
-                    <span>{diff.to || '(empty)'}</span>
+                    <span>{diff.to || `(${t('empty')})`}</span>
                   </div>
                 </div>
               )}
@@ -146,7 +148,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
       <Card>
         <CardContent className="p-6">
           <div className="text-center text-gray-500">
-            No comparison data available
+            {t('noComparisonData')}
           </div>
         </CardContent>
       </Card>
@@ -161,13 +163,13 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <GitCompare className="h-5 w-5" />
-              Version Comparison
+              {t('versionComparison')}
             </CardTitle>
             <div className="flex gap-2">
               {onBack && (
                 <Button variant="outline" onClick={onBack}>
                   <ArrowLeftRight className="h-4 w-4 mr-2" />
-                  Back to History
+                  {t('backToHistory')}
                 </Button>
               )}
               <Button
@@ -175,7 +177,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
                 onClick={handleRefreshComparison}
                 disabled={loading}
               >
-                {loading ? 'Refreshing...' : 'Refresh'}
+                {loading ? t('refreshing') : t('refresh')}
               </Button>
             </div>
           </div>
@@ -184,32 +186,32 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
           <div className="grid grid-cols-2 gap-6">
             {/* From Version */}
             <div className="space-y-3">
-              <h3 className="font-medium text-red-600">From Version</h3>
+              <h3 className="font-medium text-red-600">{t('fromVersion')}</h3>
               <div className="border rounded-lg p-4 bg-red-50 border-red-200">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-medium">{fromVersion.version_string}</span>
                   <Badge variant="outline">{fromVersion.status}</Badge>
                 </div>
                 <div className="text-sm space-y-1">
-                  <div><strong>Title:</strong> {fromVersion.title}</div>
-                  <div><strong>Created:</strong> {formatDate(fromVersion.created_at)}</div>
-                  <div><strong>By:</strong> {fromVersion.creator?.full_name || fromVersion.creator?.username}</div>
+                  <div><strong>{t('title')}:</strong> {fromVersion.title}</div>
+                  <div><strong>{t('created')}:</strong> {formatDate(fromVersion.created_at)}</div>
+                  <div><strong>{t('by')}:</strong> {fromVersion.creator?.full_name || fromVersion.creator?.username}</div>
                 </div>
               </div>
             </div>
 
             {/* To Version */}
             <div className="space-y-3">
-              <h3 className="font-medium text-green-600">To Version</h3>
+              <h3 className="font-medium text-green-600">{t('toVersion')}</h3>
               <div className="border rounded-lg p-4 bg-green-50 border-green-200">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-medium">{toVersion.version_string}</span>
                   <Badge variant="outline">{toVersion.status}</Badge>
                 </div>
                 <div className="text-sm space-y-1">
-                  <div><strong>Title:</strong> {toVersion.title}</div>
-                  <div><strong>Created:</strong> {formatDate(toVersion.created_at)}</div>
-                  <div><strong>By:</strong> {toVersion.creator?.full_name || toVersion.creator?.username}</div>
+                  <div><strong>{t('title')}:</strong> {toVersion.title}</div>
+                  <div><strong>{t('created')}:</strong> {formatDate(toVersion.created_at)}</div>
+                  <div><strong>{t('by')}:</strong> {toVersion.creator?.full_name || toVersion.creator?.username}</div>
                 </div>
               </div>
             </div>
@@ -219,11 +221,11 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
           <div className="mt-6 p-4 border rounded-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <h4 className="font-medium">Similarity Score</h4>
+                <h4 className="font-medium">{t('similarityScore')}</h4>
                 {getSimilarityIcon(comparison.similarity_score)}
               </div>
               <div className={`px-3 py-1 rounded-full font-medium ${getSimilarityColor(comparison.similarity_score)}`}>
-                {comparison.similarity_score}% similar
+                {t('percentSimilar', { score: comparison.similarity_score })}
               </div>
             </div>
           </div>
@@ -234,7 +236,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
       {error && (
         <Card>
           <CardContent className="p-6">
-            <div className="text-red-600">Error: {error}</div>
+            <div className="text-red-600">{t('error')}: {error}</div>
           </CardContent>
         </Card>
       )}
@@ -243,7 +245,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Comparison Results</CardTitle>
+            <CardTitle>{t('comparisonResults')}</CardTitle>
             <div className="flex gap-2">
               <Button
                 variant={viewMode === 'side-by-side' ? 'default' : 'outline-solid'}
@@ -251,14 +253,14 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
                 onClick={() => setViewMode('side-by-side')}
               >
                 <Eye className="h-4 w-4 mr-1" />
-                Side by Side
+                {t('sideBySide')}
               </Button>
               <Button
                 variant={viewMode === 'unified' ? 'default' : 'outline-solid'}
                 size="sm"
                 onClick={() => setViewMode('unified')}
               >
-                Git Diff
+                {t('gitDiff')}
               </Button>
             </div>
           </div>
@@ -269,7 +271,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
             <div>
               <h3 className="font-medium mb-3 flex items-center gap-2">
                 <Edit3 className="h-4 w-4" />
-                Modified Fields ({Object.keys(comparison.modified_fields).length})
+                {t('modifiedFieldsCount', { count: Object.keys(comparison.modified_fields).length })}
               </h3>
               <div className="space-y-3">
                 {Object.entries(comparison.modified_fields).map(([fieldName, diff]) =>
@@ -284,11 +286,11 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
             <div>
               <h3 className="font-medium mb-3 flex items-center gap-2">
                 <Plus className="h-4 w-4 text-green-600" />
-                Added Fields ({Object.keys(comparison.added_fields).length})
+                {t('addedFieldsCount', { count: Object.keys(comparison.added_fields).length })}
               </h3>
               <div className="space-y-3">
                 {Object.entries(comparison.added_fields).map(([fieldName, value]) => {
-                  const label = fieldLabels[fieldName] || fieldName;
+                  const label = fieldLabelKeys[fieldName] ? t(fieldLabelKeys[fieldName]) : fieldName;
                   const isCustomField = fieldName.startsWith('custom_');
                   const displayName = isCustomField ? fieldName.replace('custom_', '') : label;
 
@@ -298,7 +300,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
                         <Plus className="h-4 w-4 text-green-600" />
                         <h4 className="font-medium">{displayName}</h4>
                         <Badge variant="outline" className="text-xs bg-green-100 text-green-800">
-                          Added
+                          {t('added')}
                         </Badge>
                       </div>
                       <pre className="whitespace-pre-wrap text-sm">{value}</pre>
@@ -314,11 +316,11 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
             <div>
               <h3 className="font-medium mb-3 flex items-center gap-2">
                 <Minus className="h-4 w-4 text-red-600" />
-                Removed Fields ({Object.keys(comparison.removed_fields).length})
+                {t('removedFieldsCount', { count: Object.keys(comparison.removed_fields).length })}
               </h3>
               <div className="space-y-3">
                 {Object.entries(comparison.removed_fields).map(([fieldName, value]) => {
-                  const label = fieldLabels[fieldName] || fieldName;
+                  const label = fieldLabelKeys[fieldName] ? t(fieldLabelKeys[fieldName]) : fieldName;
                   const isCustomField = fieldName.startsWith('custom_');
                   const displayName = isCustomField ? fieldName.replace('custom_', '') : label;
 
@@ -328,7 +330,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
                         <Minus className="h-4 w-4 text-red-600" />
                         <h4 className="font-medium">{displayName}</h4>
                         <Badge variant="outline" className="text-xs bg-red-100 text-red-800">
-                          Removed
+                          {t('removed')}
                         </Badge>
                       </div>
                       <pre className="whitespace-pre-wrap text-sm">{value}</pre>
@@ -344,7 +346,7 @@ export const VersionComparison: React.FC<VersionComparisonProps> = ({
            Object.keys(comparison.added_fields).length === 0 &&
            Object.keys(comparison.removed_fields).length === 0 && (
             <div className="text-center py-8 text-gray-500">
-              No differences found between these versions.
+              {t('noDifferencesFound')}
             </div>
           )}
         </CardContent>

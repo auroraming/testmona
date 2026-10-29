@@ -31,6 +31,7 @@ export const MindmapCanvas = forwardRef<MindmapCanvasHandle, Props>(function Min
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const canvasHostRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<MindElixirInstance | null>(null);
   const linkCountsReadyRef = useRef(false);
   const onChangeRef = useRef(onChange);
@@ -41,9 +42,9 @@ export const MindmapCanvas = forwardRef<MindmapCanvasHandle, Props>(function Min
   onLinkCasesRef.current = onLinkCases;
 
   useEffect(() => {
-    if (!hostRef.current) return;
+    if (!canvasHostRef.current) return;
     const mind = new MindElixir({
-      el: hostRef.current,
+      el: canvasHostRef.current,
       direction: MindElixir.SIDE,
       editable: true,
       contextMenu: {
@@ -61,7 +62,9 @@ export const MindmapCanvas = forwardRef<MindmapCanvasHandle, Props>(function Min
       keypress: true,
       allowUndo: true,
       newTopicName: newNodeLabel,
-      overflowHidden: true,
+      // In mind-elixir 5.x this also controls pointer event registration.
+      // The outer wrapper already clips the canvas.
+      overflowHidden: false,
       compact: false,
       scaleMin: 0.25,
       scaleMax: 2.5,
@@ -78,7 +81,9 @@ export const MindmapCanvas = forwardRef<MindmapCanvasHandle, Props>(function Min
     mind.bus.addListener('selectNodes', selection);
     mind.bus.addListener('selectNewNode', (node) => setSelected(node));
     mind.bus.addListener('unselectNodes', () => setSelected(mind.currentNode?.nodeObj || null));
-    queueMicrotask(() => mind.scaleFit());
+    queueMicrotask(() => {
+      if (instanceRef.current === mind) mind.scaleFit();
+    });
 
     return () => {
       mind.bus.removeListener('operation', sync);
@@ -137,11 +142,11 @@ export const MindmapCanvas = forwardRef<MindmapCanvasHandle, Props>(function Min
     },
   }), [value]);
 
-  const mind = instanceRef.current;
   const linkCount = Number((selected?.metadata as { testCaseLinkCount?: number } | undefined)?.testCaseLinkCount || 0);
 
   return (
     <div ref={hostRef} className="relative h-[calc(100vh-15rem)] min-h-[560px] overflow-hidden rounded-xl border bg-background">
+      <div ref={canvasHostRef} className="h-full w-full" />
       <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1 rounded-lg border bg-background/95 p-1 shadow-sm backdrop-blur">
         <Button size="icon" variant="ghost" title="Undo" onClick={() => instanceRef.current?.undo()}><Undo2 className="h-4 w-4" /></Button>
         <Button size="icon" variant="ghost" title="Redo" onClick={() => instanceRef.current?.redo()}><Redo2 className="h-4 w-4" /></Button>

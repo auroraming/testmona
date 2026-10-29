@@ -9,6 +9,9 @@ from .logging_config import configure_logging
 # so uvicorn and every module-level logger share one ingestion-friendly pipeline.
 configure_logging()
 
+from fastmcp.utilities.lifespan import combine_lifespans
+from .mcp_server import create_mcp_server
+
 from .import_export import router as import_export_router
 from .api.audit import router as audit_router
 from .api.versioning_simple import router as versioning_router
@@ -36,12 +39,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
+mcp = create_mcp_server(lambda: app)
+mcp_app = mcp.http_app(path="/")
+
 app = FastAPI(
     **get_openapi_config(),
     docs_url="/api-docs",
     redoc_url="/api-redoc",
     swagger_ui_oauth2_redirect_url="/api-docs/oauth2-redirect",
-    lifespan=lifespan,
+    lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
 )
 
 # Capture request IP/user-agent for service-layer audit logging.
@@ -129,5 +135,8 @@ register_docs_routes(app)
 register_advanced_search_routes(app)
 register_resolver_routes(app)
 register_test_asset_health_routes(app)
+
+# Remote-only MCP endpoint. The mounted app has no stdio entrypoint.
+app.mount("/mcp", mcp_app)
 
 

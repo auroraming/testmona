@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import type { NodeObj } from 'mind-elixir';
-import { Loader2, Plus, Save, Trash2, Unlink } from 'lucide-react';
+import { Loader2, Plus, Save, Trash2, Unlink, Upload } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,8 @@ const freshData = (title: string): MindmapData => {
   return { version: 1, rootId, nodes: [{ id: rootId, title, parentId: null }] };
 };
 
+const MAX_XMIND_FILE_SIZE = 20 * 1024 * 1024;
+
 export function Mindmaps() {
   const { projectId, mindmapId } = useParams<{ projectId: string; mindmapId?: string }>();
   const numericProjectId = Number(projectId);
@@ -26,12 +28,14 @@ export function Mindmaps() {
   const { toast } = useToast();
   const { t } = useTranslation();
   const canvasRef = useRef<MindmapCanvasHandle>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [mindmaps, setMindmaps] = useState<TestMindmap[]>([]);
   const [selected, setSelected] = useState<TestMindmap | null>(null);
   const [data, setData] = useState<MindmapData | null>(null);
   const [linkCounts, setLinkCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
@@ -84,6 +88,45 @@ export function Mindmaps() {
       navigate(`/projects/${numericProjectId}/mindmaps/${created.id}`);
     } catch (error) {
       toast({ title: t('mindmapCreateFailed'), description: getApiErrorMessage(error, t('mindmapCreateFailed')), variant: 'destructive' });
+    }
+  };
+
+  const importXMind = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.xmind')) {
+      toast({ title: t('mindmapImportFailed'), description: t('mindmapImportFileType'), variant: 'destructive' });
+      return;
+    }
+    if (file.size > MAX_XMIND_FILE_SIZE) {
+      toast({ title: t('mindmapImportFailed'), description: t('mindmapImportFileSize'), variant: 'destructive' });
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const { importXMindFile, convertXmindToMindElixir } = await import('@mind-elixir/import-xmind');
+      const sheets = await importXMindFile(file);
+      if (!sheets.length) throw new Error(t('mindmapImportEmpty'));
+      const imported = convertXmindToMindElixir(sheets[0]);
+      const name = (imported.nodeData.topic?.trim() || sheets[0].title?.trim() || file.name.replace(/\.xmind$/i, '') || t('mindmaps')).slice(0, 255);
+      const created = await mindmapsAPI.create({
+        name,
+        description: null,
+        project_id: numericProjectId,
+        mindmap_data: fromMindElixirData(imported),
+      });
+      toast({ title: t('mindmapImported') });
+      navigate(`/projects/${numericProjectId}/mindmaps/${created.id}`);
+    } catch (error) {
+      toast({
+        title: t('mindmapImportFailed'),
+        description: error instanceof Error ? error.message : t('mindmapImportFailed'),
+        variant: 'destructive',
+      });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -162,7 +205,13 @@ export function Mindmaps() {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div><h1 className="text-2xl font-bold">{t('mindmaps')}</h1><p className="text-sm text-muted-foreground">{t('mindmapsDescription')}</p></div>
-        <Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" />{t('newMindmap')}</Button>
+        <div className="flex items-center gap-2">
+          <input ref={importInputRef} className="hidden" type="file" accept=".xmind,application/x-xmind" onChange={(event) => void importXMind(event)} />
+          <Button variant="outline" onClick={() => importInputRef.current?.click()} disabled={importing}>
+            {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}{t('importXMind')}
+          </Button>
+          <Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" />{t('newMindmap')}</Button>
+        </div>
       </div>
       <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
         <Card><CardHeader><CardTitle className="text-base">{t('mindmaps')}</CardTitle></CardHeader><CardContent className="space-y-2">

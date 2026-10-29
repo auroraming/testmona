@@ -77,6 +77,16 @@ export const testCasesAPI = {
     const response = await api.delete(`/test-cases/${id}`);
     return response.data;
   },
+  getRecycleBin: async (projectId: number, testSuiteId?: number) => {
+    const params = new URLSearchParams();
+    if (testSuiteId) params.set('test_suite_id', String(testSuiteId));
+    const response = await api.get(`/projects/${projectId}/test-cases/recycle-bin?${params}`);
+    return response.data;
+  },
+  restore: async (id: number) => {
+    const response = await api.post(`/test-cases/${id}/restore`);
+    return response.data;
+  },
   getCount: async (projectId?: number, testSuiteId?: number, sectionId?: number) => {
     const params = new URLSearchParams();
     if (projectId) params.append('project_id', projectId.toString());

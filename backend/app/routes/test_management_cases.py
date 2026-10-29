@@ -505,6 +505,17 @@ def register_case_routes(app):
 
         original_project_id = test_suite.project_id
         update_fields = test_case.model_dump(exclude_unset=True)
+        expected_updated_at = update_fields.pop("expected_updated_at", None)
+        if expected_updated_at is not None:
+            current_updated_at = original_test_case.updated_at
+            if current_updated_at is None or abs((current_updated_at.replace(tzinfo=None) - expected_updated_at.replace(tzinfo=None)).total_seconds()) > 0.001:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Test case was changed by another user. Reload it before saving.",
+                        "current_updated_at": current_updated_at.isoformat() if current_updated_at else None,
+                    },
+                )
         target_test_suite_id = update_fields.get("test_suite_id", original_test_case.test_suite_id)
 
         if test_case.test_suite_id is not None:
@@ -690,6 +701,69 @@ def register_case_routes(app):
             logger.exception("Failed to create audit trail for test case deletion %s", test_case_id)
 
         return {"message": "Test case deleted successfully"}
+
+    @app.get("/projects/{project_id}/test-cases/recycle-bin", response_model=List[schemas.TestCaseWithRelations],
+             dependencies=[Depends(require_project_feature("test_cases"))])
+    def list_deleted_test_cases(
+        project_id: int,
+        test_suite_id: Optional[int] = None,
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        if not rbac.has_permission(current_user, "read", project_id, db):
+            raise HTTPException(status_code=403, detail="Not authorized to view this project recycle bin")
+
+        query = (
+            db.query(models.TestCase)
+            .join(models.TestSuite, models.TestSuite.id == models.TestCase.test_suite_id)
+            .filter(models.TestSuite.project_id == project_id, models.TestCase.is_deleted.is_(True))
+        )
+        if test_suite_id is not None:
+            query = query.filter(models.TestCase.test_suite_id == test_suite_id)
+        return query.order_by(models.TestCase.updated_at.desc(), models.TestCase.id.desc()).all()
+
+    @app.post("/test-cases/{test_case_id}/restore", response_model=schemas.TestCaseWithRelations,
+              dependencies=[Depends(require_project_feature("test_cases"))])
+    def restore_deleted_test_case(
+        test_case_id: int,
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        db_test_case = db.query(models.TestCase).filter(models.TestCase.id == test_case_id).first()
+        if db_test_case is None or not getattr(db_test_case, "is_deleted", False):
+            raise HTTPException(status_code=404, detail="Deleted test case not found")
+
+        suite = crud.get_test_suite(db, test_suite_id=db_test_case.test_suite_id)
+        if not suite:
+            raise HTTPException(status_code=404, detail="Test suite not found for this test case")
+        if not rbac.has_permission(current_user, "delete", suite.project_id, db):
+            raise HTTPException(status_code=403, detail="Not authorized to restore this test case")
+
+        if db_test_case.section_id is not None:
+            section = crud.get_test_case_section(db, section_id=db_test_case.section_id)
+            if section is None or section.test_suite_id != db_test_case.test_suite_id:
+                db_test_case.section_id = None
+
+        db_test_case.is_deleted = False
+        db.commit()
+        db.refresh(db_test_case)
+
+        try:
+            from ..services.audit_service import get_audit_service
+            from ..schemas_audit import AuditTrailCreate
+            from ..models import AuditAction, EntityType
+            get_audit_service(db).create_audit_trail(AuditTrailCreate(
+                user_id=current_user.id,
+                action=AuditAction.UPDATE.value,
+                entity_type=EntityType.TEST_CASE.value,
+                entity_id=db_test_case.id,
+                project_id=suite.project_id,
+                description=f"Test case restored from recycle bin: {db_test_case.title or 'Untitled'}",
+            ))
+        except Exception:
+            logger.exception("Failed to create audit trail for test case restore %s", test_case_id)
+
+        return db_test_case
 
     # ------------------------- Test case watch subscriptions -------------------
 

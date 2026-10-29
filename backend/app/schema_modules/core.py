@@ -306,6 +306,9 @@ class TestCaseUpdate(BaseModel):
     order_index: Optional[int] = None
     is_multistep: Optional[bool] = None  # Flag to indicate multistep format
     dataset_id: Optional[int] = None  # Reusable data set this case iterates over (null detaches)
+    # Optimistic concurrency token. When supplied, the update is rejected if
+    # another save changed the case after the client loaded it.
+    expected_updated_at: Optional[datetime] = None
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -325,7 +328,7 @@ class TestCaseUpdate(BaseModel):
         """
         if isinstance(data, dict):
             for key, value in data.items():
-                if isinstance(value, str) and key not in ['test_type', 'priority', 'status']:
+                if isinstance(value, str) and key not in ['test_type', 'priority', 'status', 'expected_updated_at']:
                     data[key] = html.escape(html.unescape(value))
         return data
 
