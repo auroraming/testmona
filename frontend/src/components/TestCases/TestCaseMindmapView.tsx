@@ -137,6 +137,7 @@ export function TestCaseMindmapView({
   const [historyIndex, setHistoryIndex] = useState(0);
   const [pendingSelection, setPendingSelection] = useState<SelectedNode | null>(null);
   const [guardOpen, setGuardOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [clipboard, setClipboard] = useState<{ mode: 'copy' | 'cut'; node: ActionNode } | null>(null);
   const clipboardRef = useRef<typeof clipboard>(null);
   const selectedRef = useRef<SelectedNode | null>(null);
@@ -430,6 +431,7 @@ export function TestCaseMindmapView({
       }
       setSelected(metadata || null);
       selectedRef.current = metadata || null;
+      if (metadata) setDetailOpen(true);
     };
     const openSelected = () => {
       const metadata = mind.currentNode?.nodeObj.metadata as SelectedNode | undefined;
@@ -677,7 +679,7 @@ export function TestCaseMindmapView({
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-      <div ref={hostRef} className="relative h-[calc(100vh-18rem)] min-h-[560px] overflow-hidden rounded-lg border bg-background">
+      <div ref={hostRef} className="relative h-[calc(100vh-18rem)] min-h-[420px] overflow-hidden rounded-lg border bg-background sm:min-h-[560px]">
         <div ref={canvasRef} className="h-full w-full" />
         {syncing && <div className="absolute bottom-3 left-3 z-20 rounded-md border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">{labels.syncing}</div>}
         <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1 rounded-lg border bg-background/95 p-1 shadow-sm">
@@ -690,7 +692,11 @@ export function TestCaseMindmapView({
         </div>
       </div>
 
-      <aside className="max-h-[calc(100vh-18rem)] overflow-y-auto rounded-lg border bg-card p-4">
+      {selected && detailOpen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => setDetailOpen(false)} />}
+      <aside className={`${detailOpen ? 'fixed' : 'hidden'} inset-y-4 right-4 z-50 w-[min(90vw,360px)] overflow-y-auto rounded-lg border bg-card p-4 shadow-xl xl:static xl:z-auto xl:block xl:w-auto xl:max-h-[calc(100vh-18rem)] xl:shadow-none`}>
+        <div className="mb-2 flex justify-end xl:hidden">
+          <Button type="button" size="icon" variant="ghost" title={labels.cancel} onClick={() => setDetailOpen(false)}><X className="h-4 w-4" /></Button>
+        </div>
         {selected ? (
           <div className="space-y-4">
             <div>
