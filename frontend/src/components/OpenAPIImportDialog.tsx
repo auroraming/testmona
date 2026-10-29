@@ -131,7 +131,7 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
         ) : (
           <div className="space-y-4">
             <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg bg-muted/40 p-3">
-              <div><p className="font-medium">{preview.title}</p><p className="text-xs text-muted-foreground">OpenAPI {preview.version} · {preview.operations.length} {t('operations')} · {preview.drafts.length} {t('generatedTestCases')}</p></div>
+              <div><p className="font-medium">{preview.title}</p><p className="text-xs text-muted-foreground">{preview.specification === 'swagger' ? 'Swagger' : 'OpenAPI'} {preview.version} · {preview.operations.length} {t('operations')} · {preview.drafts.length} {t('generatedTestCases')}</p></div>
               <div className="grid w-full gap-3 sm:grid-cols-3">
                 <div className="space-y-1"><Label>{t('testSuite')}</Label><Select value={String(targetSuiteId)} onValueChange={(value) => { setTargetSuiteId(Number(value)); setTargetSectionId(undefined); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{testSuites.map((suite) => <SelectItem key={suite.id} value={String(suite.id)}>{suite.name}</SelectItem>)}</SelectContent></Select></div>
                 <div className="space-y-1"><Label>{t('sections')}</Label><Select value={targetSectionId ? String(targetSectionId) : 'none'} onValueChange={(value) => setTargetSectionId(value === 'none' ? undefined : Number(value))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">{t('noSection')}</SelectItem>{sectionOptions.map((section) => <SelectItem key={section.id} value={String(section.id)}>{section.label}</SelectItem>)}</SelectContent></Select></div>

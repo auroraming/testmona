@@ -427,6 +427,7 @@ export type OpenAPIDraft = {
 
 export type OpenAPIPreview = {
   title: string;
+  specification: 'openapi' | 'swagger';
   version: string;
   fingerprint: string;
   operations: Array<{ key: string; method: string; path: string; summary?: string | null }>;

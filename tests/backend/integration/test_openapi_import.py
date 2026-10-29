@@ -42,6 +42,50 @@ def _document() -> dict:
     }
 
 
+def _swagger_document() -> dict:
+    return {
+        "swagger": "2.0",
+        "info": {"title": "Legacy Orders API", "version": "1.0"},
+        "basePath": "/api",
+        "paths": {
+            "/orders/{orderId}": {
+                "parameters": [
+                    {
+                        "name": "orderId",
+                        "in": "path",
+                        "required": True,
+                        "type": "string",
+                        "default": "ORD-1",
+                    }
+                ],
+                "get": {
+                    "summary": "Get order",
+                    "parameters": [
+                        {
+                            "name": "api_key",
+                            "in": "header",
+                            "required": True,
+                            "type": "string",
+                            "default": "secret-key",
+                        },
+                        {
+                            "name": "verbose",
+                            "in": "query",
+                            "required": False,
+                            "type": "boolean",
+                            "default": True,
+                        },
+                    ],
+                    "responses": {
+                        "200": {"description": "OK"},
+                        "404": {"description": "Missing"},
+                    },
+                },
+            }
+        },
+    }
+
+
 def test_preview_generates_success_and_negative_cases_and_redacts_secrets(client):
     response = client.post(
         "/import-export/openapi/preview",
@@ -56,6 +100,38 @@ def test_preview_generates_success_and_negative_cases_and_redacts_secrets(client
     assert preview["drafts"][0]["reference"] == "GET /users/{userId}"
     assert "secret-value" not in json.dumps(preview)
     assert "<redacted>" in json.dumps(preview)
+
+
+def test_preview_converts_swagger_2_and_redacts_sensitive_parameters(client):
+    response = client.post(
+        "/import-export/openapi/preview",
+        data={"project_id": str(client.project_id)},
+        files={"file": ("swagger.json", json.dumps(_swagger_document()), "application/json")},
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["title"] == "Legacy Orders API"
+    assert preview["specification"] == "swagger"
+    assert preview["version"] == "2.0"
+    assert len(preview["operations"]) == 1
+    assert len(preview["drafts"]) == 3
+    assert preview["drafts"][0]["reference"] == "GET /orders/{orderId}"
+    serialized = json.dumps(preview)
+    assert "secret-key" not in serialized
+    assert "<redacted>" in serialized
+    assert "ORD-1" in serialized
+
+
+def test_preview_rejects_unsupported_swagger_version(client):
+    document = _swagger_document()
+    document["swagger"] = "1.2"
+    response = client.post(
+        "/import-export/openapi/preview",
+        data={"project_id": str(client.project_id)},
+        files={"file": ("swagger.json", json.dumps(document), "application/json")},
+    )
+    assert response.status_code == 400
+    assert "Swagger 2.0" in response.json()["detail"]
 
 
 def test_preview_accepts_yaml_and_rejects_remote_refs(client):

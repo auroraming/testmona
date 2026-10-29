@@ -1,4 +1,4 @@
-"""Safe OpenAPI 3.x preview and test-case conversion endpoints."""
+"""Safe OpenAPI 3.x and Swagger 2.0 preview/conversion endpoints."""
 
 from __future__ import annotations
 
@@ -122,9 +122,19 @@ def parse_openapi(contents: bytes) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid OpenAPI JSON/YAML: {exc}") from exc
     if not isinstance(document, dict):
         raise HTTPException(status_code=400, detail="OpenAPI document must be an object")
-    version = str(document.get("openapi") or "")
-    if not version.startswith("3."):
-        raise HTTPException(status_code=400, detail="MVP supports OpenAPI 3.x documents")
+    openapi_version = str(document.get("openapi") or "")
+    swagger_version = str(document.get("swagger") or "")
+    if openapi_version.startswith("3."):
+        specification = "openapi"
+        version = openapi_version
+    elif swagger_version == "2.0":
+        specification = "swagger"
+        version = swagger_version
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported API specifications are OpenAPI 3.x and Swagger 2.0",
+        )
     if _contains_remote_ref(document):
         raise HTTPException(status_code=400, detail="Remote $ref values are not allowed")
     paths = document.get("paths")
@@ -154,6 +164,7 @@ def parse_openapi(contents: bytes) -> dict[str, Any]:
                 raise HTTPException(status_code=400, detail=f"OpenAPI documents are limited to {MAX_OPERATIONS} operations")
     return {
         "title": ((document.get("info") or {}).get("title") or "OpenAPI import"),
+        "specification": specification,
         "version": version,
         "fingerprint": hashlib.sha256(contents).hexdigest(),
         "operations": operations,
