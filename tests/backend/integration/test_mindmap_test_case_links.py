@@ -131,3 +131,95 @@ def test_removing_node_cleans_its_links(client):
     })
     assert updated.status_code == 200, updated.text
     assert client.get(f"/test-cases/{case_id}/mindmaps").json() == []
+
+
+def test_deleted_cases_cannot_be_linked_and_disappear_from_existing_links(client):
+    suite_id = _suite(client, client.project_id, "Core")
+    linked_case_id = _case(client, suite_id, "Already linked")
+    deleted_case_id = _case(client, suite_id, "Deleted before linking")
+    created = client.post("/test-mindmaps/", json={
+        "name": "Deleted cases",
+        "project_id": client.project_id,
+        "mindmap_data": {"version": 1, "rootId": "root", "nodes": [{"id": "root", "title": "Root"}]},
+    })
+    mindmap_id = created.json()["id"]
+
+    linked = client.post(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases",
+        json={"test_case_ids": [linked_case_id]},
+    )
+    assert linked.status_code == 200, linked.text
+
+    assert client.delete(f"/test-cases/{linked_case_id}").status_code == 200
+    assert client.get(f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases").json() == []
+    assert client.get(f"/test-mindmaps/{mindmap_id}/links-summary").json() == {}
+
+    assert client.delete(f"/test-cases/{deleted_case_id}").status_code == 200
+    rejected = client.post(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases",
+        json={"test_case_ids": [deleted_case_id]},
+    )
+    assert rejected.status_code == 400
+
+
+def test_deactivated_mindmap_disappears_from_reverse_links(client):
+    suite_id = _suite(client, client.project_id, "Core")
+    case_id = _case(client, suite_id, "Linked case")
+    created = client.post("/test-mindmaps/", json={
+        "name": "Temporary",
+        "project_id": client.project_id,
+        "mindmap_data": {"version": 1, "rootId": "root", "nodes": [{"id": "root", "title": "Root"}]},
+    })
+    mindmap_id = created.json()["id"]
+    assert client.post(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases",
+        json={"test_case_ids": [case_id]},
+    ).status_code == 200
+
+    assert len(client.get(f"/test-cases/{case_id}/mindmaps").json()) == 1
+    assert client.delete(f"/test-mindmaps/{mindmap_id}").status_code == 200
+    assert client.get(f"/test-cases/{case_id}/mindmaps").json() == []
+    assert client.get(f"/test-mindmaps/{mindmap_id}").status_code == 404
+
+
+def test_project_outsider_cannot_read_or_modify_mindmap_links(client):
+    from app import models
+
+    suite_id = _suite(client, client.project_id, "Private")
+    case_id = _case(client, suite_id, "Private case")
+    created = client.post("/test-mindmaps/", json={
+        "name": "Private map",
+        "project_id": client.project_id,
+        "mindmap_data": {"version": 1, "rootId": "root", "nodes": [{"id": "root", "title": "Root"}]},
+    })
+    mindmap_id = created.json()["id"]
+    assert client.post(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases",
+        json={"test_case_ids": [case_id]},
+    ).status_code == 200
+
+    with client.SessionLocal() as db:
+        outsider = models.User(
+            username="mindmap-outsider",
+            email="mindmap-outsider@example.com",
+            hashed_password="x",
+            role="user",
+            is_active=True,
+            full_name="Mindmap Outsider",
+        )
+        db.add(outsider)
+        db.commit()
+        db.refresh(outsider)
+        outsider_id = outsider.id
+
+    client.set_current_user(outsider_id)
+    assert client.get(f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases").status_code == 403
+    assert client.get(f"/test-mindmaps/{mindmap_id}/links-summary").status_code == 403
+    assert client.get(f"/test-cases/{case_id}/mindmaps").status_code == 403
+    assert client.post(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases",
+        json={"test_case_ids": [case_id]},
+    ).status_code == 403
+    assert client.delete(
+        f"/test-mindmaps/{mindmap_id}/nodes/root/test-cases/{case_id}"
+    ).status_code == 403
