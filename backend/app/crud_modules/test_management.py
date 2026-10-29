@@ -308,6 +308,10 @@ def create_test_case(db: Session, test_case: TestCaseCreate, created_by: int):
 
     db_test_case = TestCase(**test_case_dict)
     db_test_case.created_by = created_by
+    # Every case needs an optimistic-concurrency token from its first edit.
+    # The database onupdate hook only runs after an UPDATE and otherwise leaves
+    # a newly-created case without protection.
+    db_test_case.updated_at = datetime.now(timezone.utc)
 
     # If multi-step data is provided, set is_multistep flag
     if test_steps_data and len(test_steps_data) > 0:
@@ -358,6 +362,16 @@ def update_test_case(db: Session, test_case_id: int, test_case: TestCaseUpdate):
                 db, db_test_case.project_id, tag_names or []
             )
             sync_tags_cache(db_test_case)
+        # SQLite's CURRENT_TIMESTAMP is only second-precision. Explicitly bump
+        # the concurrency token so two saves in the same second cannot share it.
+        next_updated_at = datetime.now(timezone.utc)
+        if db_test_case.updated_at is not None:
+            current_updated_at = db_test_case.updated_at
+            if current_updated_at.tzinfo is None:
+                current_updated_at = current_updated_at.replace(tzinfo=timezone.utc)
+            if next_updated_at <= current_updated_at:
+                next_updated_at = current_updated_at + timedelta(microseconds=1)
+        db_test_case.updated_at = next_updated_at
         safe_commit(db)
         db.refresh(db_test_case)
     return db_test_case

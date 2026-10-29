@@ -29,6 +29,15 @@ def _create_case(client, suite_id: int, title: str) -> int:
     return response.json()["id"]
 
 
+def _create_section(client, suite_id: int, name: str) -> int:
+    response = client.post(
+        "/test-case-sections",
+        json={"name": name, "test_suite_id": suite_id},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["id"]
+
+
 def test_recycle_bin_filters_by_suite_and_restores_once(client):
     first_suite_id = _create_suite(client, "Checkout")
     second_suite_id = _create_suite(client, "Search")
@@ -86,4 +95,30 @@ def test_recycle_bin_and_restore_reject_user_outside_project(client):
 
     restored = client.post(f"/test-cases/{case_id}/restore")
     assert restored.status_code == 403
+
+
+def test_restore_does_not_recreate_a_deleted_section(client):
+    suite_id = _create_suite(client, "Checkout")
+    section_id = _create_section(client, suite_id, "Legacy section")
+    response = client.post(
+        "/test-cases",
+        json={
+            "title": "Recover without directory",
+            "test_suite_id": suite_id,
+            "section_id": section_id,
+            "priority": "medium",
+            "test_type": "manual",
+        },
+    )
+    assert response.status_code == 200, response.text
+    case_id = response.json()["id"]
+
+    assert client.delete(f"/test-cases/{case_id}").status_code == 200
+    deleted_section = client.delete(f"/test-case-sections/{section_id}")
+    assert deleted_section.status_code == 200, deleted_section.text
+
+    restored = client.post(f"/test-cases/{case_id}/restore")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["section_id"] is None
+    assert client.get(f"/test-case-sections/{section_id}").status_code == 404
 
