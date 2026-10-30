@@ -8,7 +8,7 @@ without opening a second network connection or bypassing application rules.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -71,6 +71,7 @@ class TestMonaASGIClient:
         json_body: Any = None,
         files: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         access_token = get_access_token()
         if access_token is None:
@@ -90,7 +91,7 @@ class TestMonaASGIClient:
                 json=json_body,
                 files=files,
                 data=data,
-                headers={"Authorization": f"Bearer {access_token.token}"},
+                headers={"Authorization": f"Bearer {access_token.token}", **(headers or {})},
             )
 
         if response.status_code >= 400:
@@ -275,6 +276,44 @@ def create_mcp_server(app_getter: Callable[[], FastAPI]) -> FastMCP:
     async def list_test_case_mindmaps(test_case_id: PositiveInt) -> Any:
         """List mind maps and nodes linked to a test case."""
         return await api.request("GET", f"/test-cases/{test_case_id}/mindmaps")
+
+    @mcp.tool
+    async def preview_mindmap_json_test_cases(
+        test_suite_id: PositiveInt,
+        document: dict[str, Any],
+        duplicate_mode: Literal["skip", "copy"] = "skip",
+    ) -> Any:
+        """Preview a versioned TestMona mind-map JSON import without writing data."""
+        return await api.request(
+            "POST",
+            "/import-export/import/test-cases/mindmap-json",
+            json_body={
+                "test_suite_id": test_suite_id,
+                "document": document,
+                "duplicate_mode": duplicate_mode,
+                "dry_run": True,
+            },
+        )
+
+    @mcp.tool
+    async def commit_mindmap_json_test_cases(
+        test_suite_id: PositiveInt,
+        document: dict[str, Any],
+        idempotency_key: Annotated[str, Field(min_length=8, max_length=200)],
+        duplicate_mode: Literal["skip", "copy"] = "skip",
+    ) -> Any:
+        """Import a reviewed TestMona mind-map JSON document into a test suite."""
+        return await api.request(
+            "POST",
+            "/import-export/import/test-cases/mindmap-json",
+            json_body={
+                "test_suite_id": test_suite_id,
+                "document": document,
+                "duplicate_mode": duplicate_mode,
+                "dry_run": False,
+            },
+            headers={"Idempotency-Key": idempotency_key},
+        )
 
     @mcp.tool
     async def preview_openapi_test_cases(

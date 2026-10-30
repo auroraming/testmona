@@ -59,6 +59,8 @@ and do not commit a real token to the repository.
 - `link_mindmap_node_test_cases`
 - `unlink_mindmap_node_test_case`
 - `list_test_case_mindmaps`
+- `preview_mindmap_json_test_cases` validates and summarizes a versioned TestMona brain-map JSON document without writing data.
+- `commit_mindmap_json_test_cases` imports the reviewed document with a duplicate policy and required idempotency key.
 
 ### OpenAPI conversion
 

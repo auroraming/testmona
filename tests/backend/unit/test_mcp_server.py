@@ -34,6 +34,8 @@ EXPECTED_TOOLS = {
     "link_mindmap_node_test_cases",
     "unlink_mindmap_node_test_case",
     "list_test_case_mindmaps",
+    "preview_mindmap_json_test_cases",
+    "commit_mindmap_json_test_cases",
     "preview_openapi_test_cases",
     "commit_openapi_test_cases",
     "create_ai_automation_task",
@@ -83,6 +85,35 @@ async def test_tool_calls_reuse_scoped_rest_routes(monkeypatch):
         "/system/settings/default_language",
         {"json_body": {"value": "zh-CN"}},
     )
+
+
+@pytest.mark.asyncio
+async def test_mindmap_json_preview_and_commit_share_rest_contract(monkeypatch):
+    calls = []
+
+    async def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_module.TestMonaASGIClient, "request", fake_request)
+    server = mcp_module.create_mcp_server(lambda: app)
+    preview = await server.get_tool("preview_mindmap_json_test_cases")
+    commit = await server.get_tool("commit_mindmap_json_test_cases")
+    document = {"format": "testmona.test-case-mindmap", "version": 1, "sections": [], "test_cases": []}
+
+    await preview.run({"test_suite_id": 2, "document": document})
+    await commit.run({
+        "test_suite_id": 2,
+        "document": document,
+        "duplicate_mode": "copy",
+        "idempotency_key": "mcp-import-1",
+    })
+
+    assert calls[0][0:2] == ("POST", "/import-export/import/test-cases/mindmap-json")
+    assert calls[0][2]["json_body"]["dry_run"] is True
+    assert calls[1][2]["json_body"]["duplicate_mode"] == "copy"
+    assert calls[1][2]["json_body"]["dry_run"] is False
+    assert calls[1][2]["headers"] == {"Idempotency-Key": "mcp-import-1"}
 
 
 @pytest.mark.asyncio
