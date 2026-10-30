@@ -112,8 +112,11 @@ go to a temporary output directory that is removed with the process, not the
 workspace. The container runs the local `@playwright/mcp@0.0.83` CLI on
 playwright-core 1.64.1 so it uses Chromium revision 1248 from the Playwright
 image; it does not use `npx` or `--browser=chrome`. The stdio client speaks
-newline-delimited JSON, which is the framing that package reads. Model calls
-use the lease-scoped completion endpoint. An expired lease cannot complete,
+newline-delimited JSON, which is the framing that package reads. Before the
+MCP process stops, the Web Runner uploads screenshot, Trace, and console-log
+files and stores their artifact references on the evidence rows. A terminal
+report also writes the linked test result, execution record, and test-run
+status. Model calls use the lease-scoped completion endpoint. An expired lease cannot complete,
 renew, or report a pass. Batch regression, CI templates, and a real-browser
 end-to-end run are still open. The Node Web Runner is the production
 executor; the Python helper follows the same origin and assertion rules.

@@ -1,5 +1,17 @@
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
 import { PlaywrightAssertionProxy, normalizeHttpOrigin } from './assertionProxy.js';
 import { DEFAULT_PLAYWRIGHT_MCP_PACKAGE, startPlaywrightMcpWorker } from './mcpWorker.js';
+
+const ARTIFACT_TYPES = {
+  '.png': 'image/png',
+  '.zip': 'application/zip',
+  '.json': 'application/json',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.trace': 'application/zip',
+  '.network': 'text/plain',
+};
 
 const PINNED_PACKAGE = /^@playwright\/mcp@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
@@ -84,6 +96,66 @@ function evidenceFor(step) {
   };
 }
 
+async function uploadNewArtifacts(outputDir, protocol, lease, seen) {
+  if (!outputDir) return [];
+  const uploaded = [];
+  const names = await readdir(outputDir).catch(() => []);
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    const contentType = ARTIFACT_TYPES[path.extname(name).toLowerCase()];
+    if (!contentType) continue;
+    const fullPath = path.join(outputDir, name);
+    seen.add(name);
+    const artifact = await protocol.uploadArtifact(lease, await readFile(fullPath), name, contentType);
+    uploaded.push({ name, contentType, artifact_ref: artifact.artifact_ref });
+  }
+  return uploaded;
+}
+
+async function publishStep(protocol, lease, step, outputDir, seen) {
+  const item = evidenceFor(step);
+  const uploaded = await uploadNewArtifacts(outputDir, protocol, lease, seen);
+  const screenshot = uploaded.find((file) => file.contentType === 'image/png');
+  if (screenshot && item.evidence_type === 'screenshot') item.artifact_ref = screenshot.artifact_ref;
+  await protocol.appendEvidence(lease, [item]);
+  return item;
+}
+
+export async function finalizeWebAiEvidence({ lease, protocol, session, stepCount = 0 }) {
+  const outputDir = session?.outputDir;
+  const seen = session?.seenArtifacts || new Set();
+  if (session?.client?.callTool) {
+    await session.client.callTool('browser_stop_tracing', {}).catch(() => {});
+    const logs = await session.client.callTool('browser_console_messages', {}).catch(() => null);
+    const text = (logs?.content || []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n');
+    if (text.trim()) {
+      const artifact = await protocol.uploadArtifact(
+        lease, Buffer.from(text), `task-${lease.task.id}-console.txt`, 'text/plain',
+      );
+      await protocol.appendEvidence(lease, [{
+        sequence: stepCount + 1,
+        evidence_type: 'log',
+        title: 'Browser console',
+        status: 'completed',
+        payload: { text: text.slice(0, 4000) },
+        artifact_ref: artifact.artifact_ref,
+      }]);
+    }
+  }
+  const uploaded = await uploadNewArtifacts(outputDir, protocol, lease, seen);
+  const trace = uploaded.find((file) => file.name.endsWith('.trace') || file.name.endsWith('.zip'));
+  if (trace) {
+    await protocol.appendEvidence(lease, [{
+      sequence: stepCount + 2,
+      evidence_type: 'trace',
+      title: 'Playwright trace',
+      status: 'completed',
+      payload: {},
+      artifact_ref: trace.artifact_ref,
+    }]);
+  }
+}
+
 function failed(code, message, retryable, inputTokens, outputTokens, steps) {
   return {
     status: 'failed',
@@ -91,10 +163,11 @@ function failed(code, message, retryable, inputTokens, outputTokens, steps) {
     errorMessage: message,
     inputTokens,
     outputTokens,
+    stepCount: steps.length,
   };
 }
 
-export async function runWebAiLoop({ lease, protocol, proxy, now = Date.now }) {
+export async function runWebAiLoop({ lease, protocol, proxy, outputDir = null, seenArtifacts = new Set(), now = Date.now }) {
   const maxSteps = lease.task.max_steps || 50;
   const timeoutMs = (lease.task.timeout_seconds || 900) * 1000;
   const tokenBudget = lease.task.token_budget ?? null;
@@ -107,7 +180,7 @@ export async function runWebAiLoop({ lease, protocol, proxy, now = Date.now }) {
   for (let index = 0; index < maxSteps; index += 1) {
     const heartbeat = await protocol.heartbeat(lease);
     if (heartbeat.cancel_requested) {
-      return { status: 'cancelled', body: { summary: null, step_count: steps.length }, errorMessage: null, inputTokens, outputTokens };
+      return { status: 'cancelled', body: { summary: null, step_count: steps.length }, errorMessage: null, inputTokens, outputTokens, stepCount: steps.length };
     }
     if (now() - started >= timeoutMs) return failed('timeout', 'Agent Runtime exceeded its task timeout', true, inputTokens, outputTokens, steps);
     if (tokenBudget != null && inputTokens + outputTokens >= tokenBudget) {
@@ -132,7 +205,7 @@ export async function runWebAiLoop({ lease, protocol, proxy, now = Date.now }) {
       if (!hasPassingAssertion(steps)) {
         return failed('missing_assertion', 'AI cannot finish successfully without a passing assertion tool result', false, inputTokens, outputTokens, steps);
       }
-      return { status: 'passed', body: { summary: decision.summary, step_count: steps.length, error: null }, errorMessage: null, inputTokens, outputTokens };
+      return { status: 'passed', body: { summary: decision.summary, step_count: steps.length, error: null }, errorMessage: null, inputTokens, outputTokens, stepCount: steps.length };
     }
     const step = { sequence: steps.length + 1, tool: decision.tool, arguments: decision.arguments, output: null, error: null };
     try {
@@ -140,11 +213,11 @@ export async function runWebAiLoop({ lease, protocol, proxy, now = Date.now }) {
     } catch (error) {
       step.error = { code: 'tool_error', message: error instanceof Error ? error.message : 'Tool failed', retryable: false };
       steps.push(step);
-      await protocol.appendEvidence(lease, [evidenceFor(step)]);
+      await publishStep(protocol, lease, step, outputDir, seenArtifacts);
       return failed(step.error.code, step.error.message, false, inputTokens, outputTokens, steps);
     }
     steps.push(step);
-    await protocol.appendEvidence(lease, [evidenceFor(step)]);
+    await publishStep(protocol, lease, step, outputDir, seenArtifacts);
   }
   return failed('max_steps_exceeded', 'Agent Runtime reached the maximum number of steps', false, inputTokens, outputTokens, steps);
 }
@@ -164,8 +237,12 @@ export async function executeWebAi(lease, dependencies) {
       workspace: dependencies.workspace || process.env.TESTMONA_PLAYWRIGHT_WORKSPACE || '/runner/artifacts',
     });
     started = true;
+    session.seenArtifacts = new Set();
+    await session.client?.callTool?.('browser_start_tracing', {}).catch(() => {});
     const proxy = new PlaywrightAssertionProxy(session.client, origin);
-    result = await runWebAiLoop({ lease, protocol, proxy, now: dependencies.now });
+    result = await runWebAiLoop({
+      lease, protocol, proxy, outputDir: session.outputDir, seenArtifacts: session.seenArtifacts, now: dependencies.now,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Playwright MCP worker failed';
     result = {
@@ -174,10 +251,13 @@ export async function executeWebAi(lease, dependencies) {
       errorMessage: message,
       inputTokens: 0,
       outputTokens: 0,
+      stepCount: 0,
     };
-  } finally {
-    await session?.stop();
   }
+  if (started && session) {
+    await finalizeWebAiEvidence({ lease, protocol, session, stepCount: result?.stepCount || 0 }).catch(() => {});
+  }
+  await session?.stop();
   await protocol.report(lease, result.status, result.body, result.errorMessage, result.inputTokens, result.outputTokens);
   return result;
 }

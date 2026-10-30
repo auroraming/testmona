@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { executeWebAi, runWebAiLoop } from '../src/aiExecutor.js';
 
 function protocol(decisions) {
@@ -89,6 +92,50 @@ test('an explicit passing assertion can finish the task', async () => {
   assert.equal(runner.events.evidence[0].evidence_type, 'assertion');
   assert.equal(runner.events.reports[0].inputTokens, 4);
   assert.equal(session.stopped(), 1);
+});
+
+test('uploads screenshot, trace, and console log before the worker stops', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ai-evidence-'));
+  await writeFile(path.join(dir, 'page.png'), Buffer.from('png'));
+  const runner = protocol([
+    '{"type":"tool","tool":"browser_take_screenshot","arguments":{}}',
+    '{"type":"tool","tool":"browser_assert_text","arguments":{"expected":"Welcome"}}',
+    '{"type":"finish","summary":"Title is visible"}',
+  ]);
+  runner.uploadArtifact = async (_lease, _bytes, filename) => ({ artifact_ref: `ai-automation/7/${filename}` });
+  let stopped = 0;
+  const result = await executeWebAi(lease(), {
+    protocol: runner,
+    sessionFactory: async () => ({
+      outputDir: dir,
+      client: {
+        async listTools() {
+          return [{ name: 'browser_snapshot', description: 'snapshot' }, { name: 'browser_take_screenshot', description: 'shot' }];
+        },
+        async callTool(name) {
+          if (name === 'browser_console_messages') return { content: [{ type: 'text', text: 'console ready' }] };
+          if (name === 'browser_stop_tracing') {
+            await writeFile(path.join(dir, 'trace.trace'), Buffer.from('PK'));
+            return { content: [] };
+          }
+          if (name === 'browser_snapshot') return { content: [{ type: 'text', text: 'heading "Welcome"' }] };
+          return { content: [{ type: 'text', text: 'saved ./page.png' }] };
+        },
+      },
+      async stop() {
+        stopped += 1;
+        await rm(dir, { recursive: true, force: true });
+      },
+    }),
+  });
+  assert.equal(result.status, 'passed');
+  const screenshot = runner.events.evidence.find((item) => item.evidence_type === 'screenshot');
+  const trace = runner.events.evidence.find((item) => item.evidence_type === 'trace');
+  const log = runner.events.evidence.find((item) => item.evidence_type === 'log');
+  assert.equal(screenshot.artifact_ref, 'ai-automation/7/page.png');
+  assert.match(trace.artifact_ref, /trace\.trace/);
+  assert.match(log.artifact_ref, /console\.txt/);
+  assert.equal(stopped, 1);
 });
 
 test('cancellation and startup failure stop cleanly', async () => {

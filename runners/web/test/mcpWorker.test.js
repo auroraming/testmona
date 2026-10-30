@@ -8,7 +8,7 @@ import { PlaywrightAssertionProxy } from '../src/assertionProxy.js';
 test('builds the image Chromium command without a Chrome channel', () => {
   const args = buildPlaywrightMcpArgs('https://example.test:8443', '/tmp/testmona-mcp-output');
   assert.deepEqual(args, [
-    '--headless', '--isolated', '--block-service-workers',
+    '--headless', '--isolated', '--caps=devtools', '--block-service-workers',
     '--allowed-origins=https://example.test:8443', '--idle-timeout=300000',
     '--image-responses=omit', '--output-dir=/tmp/testmona-mcp-output',
   ]);
@@ -107,6 +107,31 @@ process.stdin.on('data', (chunk) => {
   }
 });
 `;
+
+test('stdin EPIPE rejects the handshake and removes the temporary directory', async () => {
+  const child = {
+    killed: false,
+    stdin: {
+      destroyed: false,
+      writable: true,
+      write(_data, callback) {
+        const error = new Error('write EPIPE');
+        error.code = 'EPIPE';
+        callback(error);
+      },
+      on() {},
+    },
+    stdout: new EventEmitter(),
+    kill(signal) { this.killed = signal; },
+    on() {},
+  };
+  await assert.rejects(() => startPlaywrightMcpWorker({
+    allowedOrigin: 'https://example.test',
+    spawnImpl: () => child,
+    clientFactory: (spawned) => createStdioMcpClient(spawned, 200),
+  }), /EPIPE/);
+  assert.equal(child.killed, 'SIGTERM');
+});
 
 function fakeChild() {
   const stdout = new EventEmitter();

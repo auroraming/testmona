@@ -37,10 +37,26 @@ def _origin_from_parts(parts) -> str:
     return f"{parts.scheme}://{host}:{port}" if port else f"{parts.scheme}://{host}"
 
 
+def _collapse_dot_segments(path: str) -> str:
+    """Match WHATWG URL path normalization, including ``/./`` and ``/foo/../``."""
+    if path in {"", "/"}:
+        return "/"
+    segments: list[str] = []
+    for part in path.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(part)
+    return "/" + "/".join(segments) if segments else "/"
+
+
 def normalize_http_origin(value: str) -> str:
     """Return a scheme/host/port origin, rejecting credentials and extra URL parts."""
     parts = urlsplit(value.strip())
-    if parts.path not in {"", "/"} or parts.query or parts.fragment:
+    if _collapse_dot_segments(parts.path) != "/" or parts.query or parts.fragment:
         raise ValueError("URL must be an origin without a path, query, or fragment")
     return _origin_from_parts(parts)
 

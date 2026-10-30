@@ -46,6 +46,7 @@ def build_playwright_mcp_transport(
         args=[
             "--headless",
             "--isolated",
+            "--caps=devtools",
             "--block-service-workers",
             f"--allowed-origins={origin}",
             "--idle-timeout=300000",

@@ -608,3 +608,74 @@ def test_invalid_target_origin_is_rejected_when_saved(client):
     })
     assert saved.status_code == 200, saved.text
     assert saved.json()["config_data"]["app_url"] == "https://example.test:443"
+
+
+def test_ai_report_writes_result_execution_and_run(client):
+    from app import models
+
+    with client.SessionLocal() as db:
+        suite = models.TestSuite(name="Web", project_id=client.project_id)
+        db.add(suite)
+        db.flush()
+        case = models.TestCase(
+            title="Welcome", test_suite_id=suite.id, project_id=client.project_id, priority="medium",
+        )
+        db.add(case)
+        db.flush()
+        run = models.TestRun(name="Round 1", project_id=client.project_id, status="pending")
+        db.add(run)
+        db.flush()
+        execution = models.TestExecution(
+            test_case_id=case.id, test_run_id=run.id, executor_id=1, status=models.TestStatus.PENDING,
+        )
+        db.add(execution)
+        db.commit()
+        case_id, run_id = case.id, run.id
+
+    _runner, token = _register_runner(client, "web")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "execution_mode": "ai",
+        "goal": "Welcome is visible",
+        "test_case_id": case_id,
+        "test_run_id": run_id,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    evidence = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [{
+            "sequence": 1, "evidence_type": "screenshot", "title": "browser_take_screenshot",
+            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/page.png",
+        }, {
+            "sequence": 2, "evidence_type": "assertion", "title": "browser_assert_text",
+            "status": "passed", "payload": {"output": {"structured_content": {"passed": True}}},
+        }, {
+            "sequence": 3, "evidence_type": "trace", "title": "Playwright trace",
+            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/trace.zip",
+        }, {
+            "sequence": 4, "evidence_type": "log", "title": "Browser console",
+            "status": "completed", "payload": {"text": "console ready"},
+            "artifact_ref": "ai-automation/1/console.txt",
+        }]},
+    )
+    assert evidence.status_code == 200, evidence.text
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "passed", "result": {"summary": "Title is visible"}},
+    )
+    assert report.status_code == 200, report.text
+    results = client.get("/test-results", params={"test_run_id": run_id})
+    assert results.status_code == 200, results.text
+    assert results.json()[0]["status"] == "pass"
+    assert results.json()[0]["execution_time"] >= 0
+    with client.SessionLocal() as db:
+        stored_run = db.query(models.TestRun).filter(models.TestRun.id == run_id).one()
+        stored_execution = db.query(models.TestExecution).filter(models.TestExecution.test_run_id == run_id).one()
+        assert stored_run.status == "completed"
+        assert stored_execution.status == models.TestStatus.PASSED
+        assert "ai-automation/1/page.png" in stored_execution.screenshots
+        assert "Browser console" in stored_execution.logs

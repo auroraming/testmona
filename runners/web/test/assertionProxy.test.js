@@ -56,7 +56,8 @@ test('navigation outside the origin is not sent to the browser', async () => {
   await assert.rejects(() => proxy.callTool('browser_navigate', { url: 'https://evil.test', filename: 'x.txt', token: 'secret' }), /allowed origin/);
   assert.deepEqual(client.calls, []);
   await proxy.callTool('browser_navigate', { url: 'https://example.test/login', filename: 'x.txt' });
-  assert.deepEqual(client.calls, [['browser_navigate', { url: 'https://example.test/login' }]]);
+  assert.deepEqual(client.calls[0], ['browser_navigate', { url: 'https://example.test/login' }]);
+  assert.ok(client.calls.some((call) => call[0] === 'browser_tabs' && call[1].action === 'list'));
 });
 
 test('a same-origin URL that redirects off-origin is rejected after navigation', async () => {
@@ -68,13 +69,39 @@ test('a same-origin URL that redirects off-origin is rejected after navigation',
   const proxy = new PlaywrightAssertionProxy(client, 'https://example.test');
   await assert.rejects(() => proxy.callTool('browser_navigate', { url: 'https://example.test/redirect' }), /allowed origin/);
   assert.deepEqual(client.calls[0], ['browser_navigate', { url: 'https://example.test/redirect' }]);
-  assert.equal(client.calls[1][0], 'browser_navigate_back');
+  assert.ok(client.calls.some((call) => call[0] === 'browser_navigate_back'));
   await assert.rejects(() => proxy.callTool('browser_click', { target: 'e1' }), /allowed origin/);
+});
+
+test('closes a chrome-error tab left by target=_blank and restores a failed navigation', async () => {
+  const tabs = browser({
+    browser_click: { content: [{ type: 'text', text: '- Page URL: https://example.test/' }] },
+    browser_tabs: { content: [{ type: 'text', text: '- 0: (current) [Home](https://example.test/)\n- 1: [Popup](chrome-error://chromewebdata/)' }] },
+  });
+  const proxy = new PlaywrightAssertionProxy(tabs, 'https://example.test');
+  await assert.rejects(() => proxy.callTool('browser_click', { target: 'e1' }), /allowed origin/);
+  assert.ok(tabs.calls.some((call) => call[0] === 'browser_tabs' && call[1].action === 'close' && call[1].index === 1));
+
+  const calls = [];
+  const failing = {
+    async callTool(name, args) {
+      calls.push([name, args]);
+      if (name === 'browser_navigate') throw new Error("Tool 'browser_navigate' returned an error");
+      if (name === 'browser_tabs' && args.action === 'list') {
+        return { content: [{ type: 'text', text: '- 0: (current) [Err](chrome-error://chromewebdata/)' }] };
+      }
+      return { content: [] };
+    },
+  };
+  const recovery = new PlaywrightAssertionProxy(failing, 'https://example.test');
+  await assert.rejects(() => recovery.callTool('browser_navigate', { url: 'https://example.test/redirect' }), /returned an error/);
+  assert.ok(calls.some((call) => call[0] === 'browser_tabs' && call[1].action === 'close'));
 });
 
 test('origin normalization matches WHATWG default ports and IPv6', async () => {
   const { normalizeHttpOrigin, requestOrigin } = await import('../src/assertionProxy.js');
   assert.equal(normalizeHttpOrigin('https://example.test:443'), 'https://example.test');
+  assert.equal(normalizeHttpOrigin('https://example.test:443/./'), 'https://example.test');
   assert.equal(normalizeHttpOrigin('https://[::1]:8443'), 'https://[::1]:8443');
   assert.equal(requestOrigin('https://example.test:443/login'), 'https://example.test');
 });

@@ -78,7 +78,7 @@ class PlaywrightMCPWorker:
         package_ref: str,
         allowed_origin: str,
         workspace: str,
-        command: str = "npx",
+        command: str = "node",
         transport_factory: Callable[..., Any] = build_playwright_mcp_transport,
         client_factory: Callable[[Any], Any] | None = None,
     ) -> None:

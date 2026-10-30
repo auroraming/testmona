@@ -123,6 +123,17 @@ function assertionResult(passed, expected, actual) {
   };
 }
 
+export function listTabLocations(result) {
+  const tabs = [];
+  for (const line of contentText(result).split('\n')) {
+    const index = /^- (\d+):/u.exec(line);
+    const link = /\]\(([^)]+)\)/u.exec(line);
+    if (!index || !link) continue;
+    tabs.push({ index: Number(index[1]), url: link[1], current: line.includes('(current)') });
+  }
+  return tabs;
+}
+
 export function extractPageLocation(result) {
   const pageLine = contentText(result).split('\n').find((line) => /page url\s*:/iu.test(line));
   if (pageLine) {
@@ -223,11 +234,16 @@ export class PlaywrightAssertionProxy {
     }
     const payload = this.#sanitize(name, args);
     this.#enforceNavigation(name, payload);
-    const result = sanitizeToolResult(await this.client.callTool(name, payload));
-    if (['browser_navigate', 'browser_navigate_back', 'browser_click'].includes(name) || (name === 'browser_tabs' && payload.action === 'new')) {
-      await this.#ensureOnOrigin(result, name !== 'browser_navigate_back');
+    const checksOrigin = ['browser_navigate', 'browser_navigate_back', 'browser_click'].includes(name)
+      || (name === 'browser_tabs' && payload.action === 'new');
+    try {
+      const result = sanitizeToolResult(await this.client.callTool(name, payload));
+      if (checksOrigin) await this.#ensureOnOrigin(result, name !== 'browser_navigate_back');
+      return result;
+    } catch (error) {
+      if (checksOrigin) await this.#ensureOnOrigin({ content: [] }, name !== 'browser_navigate_back').catch(() => {});
+      throw error;
     }
-    return result;
   }
 
   #sanitize(name, args) {
@@ -253,12 +269,19 @@ export class PlaywrightAssertionProxy {
   }
 
   async #ensureOnOrigin(actionResult, navigateBack) {
-    let current = extractPageLocation(actionResult);
-    if (!current) current = extractPageLocation(await this.#observe('browser_tabs', { action: 'list' }));
-    if (current && !pageStaysOnOrigin(current, this.allowedOrigin)) {
-      if (navigateBack) await this.client.callTool('browser_navigate_back', {}).catch(() => {});
-      throw new Error('Navigation left the allowed origin');
+    const current = extractPageLocation(actionResult);
+    const listed = await this.#observe('browser_tabs', { action: 'list' }).catch(() => null);
+    const tabs = listed ? listTabLocations(listed) : [];
+    const badTabs = tabs.filter((tab) => !pageStaysOnOrigin(tab.url, this.allowedOrigin));
+    const currentBad = Boolean(current && !pageStaysOnOrigin(current, this.allowedOrigin));
+    // Cross-origin iframes stay inside the browser sandbox. Only the top-level
+    // tab origin is enforced; rejecting every third-party frame would fail ordinary pages.
+    if (!badTabs.length && !currentBad) return;
+    if (navigateBack && currentBad) await this.client.callTool('browser_navigate_back', {}).catch(() => {});
+    for (const tab of badTabs.sort((left, right) => right.index - left.index)) {
+      await this.client.callTool('browser_tabs', { action: 'close', index: tab.index }).catch(() => {});
     }
+    throw new Error('Navigation left the allowed origin');
   }
 
   async #observe(name, args) {

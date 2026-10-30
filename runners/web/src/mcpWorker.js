@@ -20,6 +20,7 @@ export function buildPlaywrightMcpArgs(allowedOrigin, outputDir, executablePath)
   const args = [
     '--headless',
     '--isolated',
+    '--caps=devtools',
     '--block-service-workers',
     `--allowed-origins=${origin}`,
     '--idle-timeout=300000',
@@ -66,6 +67,27 @@ export function resolveInstalledMcpCli(packageRef = process.env.TESTMONA_PLAYWRI
   return path.join(path.dirname(require.resolve('@playwright/mcp/package.json')), 'cli.js');
 }
 
+function writeFrame(child, payload) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error instanceof Error ? error : new Error('MCP process is not accepting input'));
+      else resolve();
+    };
+    if (!child?.stdin || child.stdin.destroyed || child.stdin.writable === false) {
+      finish(new Error('MCP process is not accepting input'));
+      return;
+    }
+    try {
+      child.stdin.write(encodeMessage(payload), (error) => finish(error));
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
 export function createStdioMcpClient(child, timeoutMs = 30000) {
   let nextId = 1;
   const pending = new Map();
@@ -78,6 +100,14 @@ export function createStdioMcpClient(child, timeoutMs = 30000) {
     else waiter.resolve(message.result);
   });
   child.stdout.on('data', parser);
+  child.stdin?.on?.('error', () => {});
+  child.on?.('exit', () => {
+    for (const waiter of pending.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error('MCP process exited'));
+    }
+    pending.clear();
+  });
   const request = (method, params) => new Promise((resolve, reject) => {
     const id = nextId;
     nextId += 1;
@@ -86,7 +116,13 @@ export function createStdioMcpClient(child, timeoutMs = 30000) {
       reject(new Error('MCP operation timed out'));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
-    child.stdin.write(encodeMessage({ jsonrpc: '2.0', id, method, params }));
+    writeFrame(child, { jsonrpc: '2.0', id, method, params }).catch((error) => {
+      const waiter = pending.get(id);
+      if (!waiter) return;
+      pending.delete(id);
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    });
   });
   return {
     async health() {
@@ -118,23 +154,27 @@ export async function startPlaywrightMcpWorker({
   clientFactory = null,
   executablePath = process.env.TESTMONA_PLAYWRIGHT_EXECUTABLE || '',
 } = {}) {
-  assertPinnedMcpPackage(packageRef);
-  const outputDir = await mkdtemp(path.join(tmpdir(), 'testmona-mcp-'));
-  const toolArgs = buildPlaywrightMcpArgs(allowedOrigin, outputDir, executablePath || undefined);
-  const prefix = clientFactory ? [] : [resolveInstalledMcpCli(packageRef)];
-  const child = spawnImpl(command, [...prefix, ...toolArgs], {
-    cwd: outputDir,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: process.env,
-  });
+  let outputDir = null;
+  let child = null;
   let stopped = false;
   const stop = async () => {
     if (stopped) return;
     stopped = true;
     if (child && !child.killed) child.kill('SIGTERM');
-    await rm(outputDir, { recursive: true, force: true });
+    if (outputDir) await rm(outputDir, { recursive: true, force: true });
   };
   try {
+    assertPinnedMcpPackage(packageRef);
+    outputDir = await mkdtemp(path.join(tmpdir(), 'testmona-mcp-'));
+    const toolArgs = buildPlaywrightMcpArgs(allowedOrigin, outputDir, executablePath || undefined);
+    const prefix = clientFactory ? [] : [resolveInstalledMcpCli(packageRef)];
+    child = spawnImpl(command, [...prefix, ...toolArgs], {
+      cwd: outputDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
+    });
+    child.stdin?.on?.('error', () => {});
+    child.on?.('error', () => {});
     const client = clientFactory ? clientFactory(child) : createStdioMcpClient(child);
     await client.health();
     return { client, stop, args: toolArgs, outputDir };
