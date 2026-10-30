@@ -39,11 +39,6 @@ const ASSERTION_TOOLS = {
   },
 };
 
-function originFrom(parsed) {
-  const port = parsed.port ? `:${parsed.port}` : '';
-  return `${parsed.protocol}//${parsed.hostname}${port}`;
-}
-
 export function normalizeHttpOrigin(value) {
   let parsed;
   try { parsed = new URL(value); } catch { throw new Error('URL must be an http(s) origin without credentials'); }
@@ -53,15 +48,25 @@ export function normalizeHttpOrigin(value) {
   if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
     throw new Error('URL must be an origin without a path, query, or fragment');
   }
-  return originFrom(parsed);
+  return parsed.origin;
 }
 
 export function requestOrigin(value) {
   try {
     const parsed = new URL(value);
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return null;
-    return originFrom(parsed);
+    return parsed.origin;
   } catch { return null; }
+}
+
+export function containsPhrase(haystack, expected) {
+  const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(haystack);
+}
+
+function pageStaysOnOrigin(url, allowedOrigin) {
+  if (url.trim() === 'about:blank') return true;
+  return requestOrigin(url) === allowedOrigin;
 }
 
 function isSecretKey(key) {
@@ -118,6 +123,15 @@ function assertionResult(passed, expected, actual) {
   };
 }
 
+export function extractPageLocation(result) {
+  const pageLine = contentText(result).split('\n').find((line) => /page url\s*:/iu.test(line));
+  if (pageLine) {
+    const match = /page url\s*:\s*(\S+)/iu.exec(pageLine);
+    if (match) return match[1].replace(/[).,]+$/u, '');
+  }
+  return extractCurrentUrl(result);
+}
+
 export function extractCurrentUrl(result) {
   const structured = result?.structured_content;
   const tabs = Array.isArray(structured) ? structured : structured?.tabs || structured?.items;
@@ -132,8 +146,9 @@ export function extractCurrentUrl(result) {
   }
   const text = contentText(result);
   const lines = text.split('\n');
+  const pageUrl = lines.filter((line) => /page url\s*:/iu.test(line));
   const current = lines.filter((line) => line.toLowerCase().includes('current'));
-  for (const line of (current.length ? current : lines)) {
+  for (const line of (pageUrl.length ? pageUrl : current.length ? current : lines)) {
     const match = URL_RE.exec(line);
     URL_RE.lastIndex = 0;
     if (match) return match[0];
@@ -208,7 +223,11 @@ export class PlaywrightAssertionProxy {
     }
     const payload = this.#sanitize(name, args);
     this.#enforceNavigation(name, payload);
-    return sanitizeToolResult(await this.client.callTool(name, payload));
+    const result = sanitizeToolResult(await this.client.callTool(name, payload));
+    if (['browser_navigate', 'browser_navigate_back', 'browser_click'].includes(name) || (name === 'browser_tabs' && payload.action === 'new')) {
+      await this.#ensureOnOrigin(result, name !== 'browser_navigate_back');
+    }
+    return result;
   }
 
   #sanitize(name, args) {
@@ -233,6 +252,15 @@ export class PlaywrightAssertionProxy {
     }
   }
 
+  async #ensureOnOrigin(actionResult, navigateBack) {
+    let current = extractPageLocation(actionResult);
+    if (!current) current = extractPageLocation(await this.#observe('browser_tabs', { action: 'list' }));
+    if (current && !pageStaysOnOrigin(current, this.allowedOrigin)) {
+      if (navigateBack) await this.client.callTool('browser_navigate_back', {}).catch(() => {});
+      throw new Error('Navigation left the allowed origin');
+    }
+  }
+
   async #observe(name, args) {
     return sanitizeToolResult(await this.client.callTool(name, args));
   }
@@ -250,7 +278,7 @@ export class PlaywrightAssertionProxy {
     if (name === 'browser_assert_text') {
       const expected = requireText(args.expected, 'expected text', 500);
       const text = observationText(await this.#observe('browser_snapshot', {}));
-      return assertionResult(text.includes(expected), expected, text.slice(0, 2000));
+      return assertionResult(containsPhrase(text, expected), expected, text.slice(0, 2000));
     }
     if (name === 'browser_assert_visible') {
       const label = requireText(args.name, 'accessible name', 300);

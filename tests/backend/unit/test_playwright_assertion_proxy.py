@@ -49,9 +49,11 @@ async def test_text_and_visibility_assertions_are_explicit():
     passed = await proxy.call_tool("browser_assert_text", {"expected": "Welcome"})
     visible = await proxy.call_tool("browser_assert_visible", {"name": "Sign in"})
     missing = await proxy.call_tool("browser_assert_text", {"expected": "Goodbye"})
+    letter = await proxy.call_tool("browser_assert_text", {"expected": "e"})
     assert passed["structured_content"]["passed"] is True
     assert visible["structured_content"]["passed"] is True
     assert missing["structured_content"]["passed"] is False
+    assert letter["structured_content"]["passed"] is False
     assert all(call[0] == "browser_snapshot" for call in browser.calls)
 
 
@@ -81,13 +83,32 @@ async def test_network_assertion_ignores_other_origins():
 
 @pytest.mark.asyncio
 async def test_navigation_outside_origin_is_not_sent_to_the_browser():
-    proxy, browser = proxy_for({})
+    proxy, browser = proxy_for({
+        "browser_navigate": {"content": [{"type": "text", "text": "- Page URL: https://example.test/login"}]},
+    })
     with pytest.raises(AutomationMCPError) as exc_info:
         await proxy.call_tool("browser_navigate", {"url": "https://evil.test/steal", "filename": "note.txt", "token": "secret"})
     assert exc_info.value.code == "origin_forbidden"
     assert browser.calls == []
     await proxy.call_tool("browser_navigate", {"url": "https://example.test/login", "filename": "note.txt"})
     assert browser.calls == [("browser_navigate", {"url": "https://example.test/login"})]
+
+
+@pytest.mark.asyncio
+async def test_same_origin_redirect_and_external_click_are_rejected():
+    proxy, browser = proxy_for({
+        "browser_navigate": {"content": [{"type": "text", "text": "- Page URL: https://evil.test/landed"}]},
+        "browser_click": {"content": [{"type": "text", "text": "- Page URL: chrome-error://chromewebdata/"}]},
+        "browser_navigate_back": {"content": [{"type": "text", "text": "- Page URL: https://example.test/"}]},
+    })
+    with pytest.raises(AutomationMCPError) as redirected:
+        await proxy.call_tool("browser_navigate", {"url": "https://example.test/redirect"})
+    assert redirected.value.code == "origin_forbidden"
+    assert browser.calls[0] == ("browser_navigate", {"url": "https://example.test/redirect"})
+    assert browser.calls[1][0] == "browser_navigate_back"
+    with pytest.raises(AutomationMCPError):
+        await proxy.call_tool("browser_click", {"target": "e1"})
+    assert any(call[0] == "browser_click" for call in browser.calls)
 
 
 @pytest.mark.asyncio

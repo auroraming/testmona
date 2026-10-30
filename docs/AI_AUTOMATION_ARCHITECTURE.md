@@ -102,16 +102,21 @@ upload tools.
 Web AI tasks connect that transport to an assertion proxy and a per-task
 process lifecycle. The proxy adds `browser_assert_text`,
 `browser_assert_visible`, `browser_assert_url`, and `browser_assert_network`.
-Those tools read a snapshot, tab list, or captured request list and return
-`passed: true` only when the observation matches. Navigation outside the
-environment origin is rejected before it reaches the browser, because the MCP
-`--allowed-origins` flag is not a security boundary. Request-detail and image
-payloads are hidden, and file-writing arguments are dropped. The Web Runner
-starts `@playwright/mcp@0.0.83` for one task and disconnects it before the
-terminal report. Model calls from that container use the lease-scoped
-completion endpoint; a completion never marks the task passed. Batch
-regression, CI templates, and a real-browser end-to-end run are still open.
-The MCP package pin is independent of the fixed-script Playwright 1.64.1 image.
+Text assertions match a whole phrase. Those tools read a snapshot, tab list,
+or captured request list and return `passed: true` only when the observation
+matches. Direct navigation outside the environment origin is rejected before
+it reaches the browser. After navigation or a click, the proxy also checks the
+resulting page URL, because the MCP `--allowed-origins` flag does not stop
+redirects. Request-detail and image payloads are hidden. Automatic MCP files
+go to a temporary output directory that is removed with the process, not the
+workspace. The container runs the local `@playwright/mcp@0.0.83` CLI on
+playwright-core 1.64.1 so it uses Chromium revision 1248 from the Playwright
+image; it does not use `npx` or `--browser=chrome`. The stdio client speaks
+newline-delimited JSON, which is the framing that package reads. Model calls
+use the lease-scoped completion endpoint. An expired lease cannot complete,
+renew, or report a pass. Batch regression, CI templates, and a real-browser
+end-to-end run are still open. The Node Web Runner is the production
+executor; the Python helper follows the same origin and assertion rules.
 
 ## API Runner baseline
 

@@ -79,11 +79,19 @@ def _authenticate_runner(db: Session, token: str | None) -> models.AIAutomationR
     return runner
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _verify_lease(task: models.AIAutomationTask, runner: models.AIAutomationRunner, lease_token: str) -> None:
     if task.runner_id != runner.id or not task.lease_token_hash:
         raise HTTPException(status_code=409, detail="Task is not leased to this runner")
     if not secrets.compare_digest(task.lease_token_hash, _token_hash(lease_token)):
         raise HTTPException(status_code=401, detail="Invalid task lease")
+    if task.lease_expires_at is None or _as_utc(task.lease_expires_at) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=409, detail="Task lease has expired")
 
 
 def _validate_project_links(db: Session, payload: schemas.AIAutomationTaskCreate) -> None:

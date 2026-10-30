@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from jsonschema import ValidationError, validate
 
 from .automation_mcp_client import AutomationMCPError, AutomationMCPTool, strip_inline_secrets
+from .automation_origins import normalize_http_origin, request_origin
 from .playwright_mcp_transport import PLAYWRIGHT_SAFE_TOOLS
 
 PROXY_HIDDEN_TOOLS = frozenset({"browser_network_request"})
@@ -77,23 +78,9 @@ ASSERTION_TOOL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def normalize_http_origin(value: str) -> str:
-    """Return a scheme/host/port origin, rejecting credentials and extra URL parts."""
-    parsed = urlparse(value.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("URL must be an http(s) origin without credentials")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise ValueError("URL must be an origin without a path, query, or fragment")
-    port = f":{parsed.port}" if parsed.port else ""
-    return f"{parsed.scheme}://{parsed.hostname}{port}"
-
-
-def request_origin(url: str) -> str | None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        return None
-    port = f":{parsed.port}" if parsed.port else ""
-    return f"{parsed.scheme}://{parsed.hostname}{port}"
+def contains_phrase(haystack: str, expected: str) -> bool:
+    """Match a whole phrase, not a letter buried inside a longer word."""
+    return re.search(rf"(?<!\w){re.escape(expected)}(?!\w)", haystack) is not None
 
 
 def redact_url(url: str) -> str:
@@ -145,6 +132,15 @@ def sanitize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def extract_page_location(result: dict[str, Any]) -> str | None:
+    """Prefer the browser's reported page URL, including non-HTTP error pages."""
+    for line in content_text(result).splitlines():
+        match = re.search(r"page url\s*:\s*(\S+)", line, re.IGNORECASE)
+        if match:
+            return match.group(1).rstrip(").,")
+    return extract_current_url(result)
+
+
 def extract_current_url(result: dict[str, Any]) -> str | None:
     structured = result.get("structured_content")
     tabs = None
@@ -164,8 +160,10 @@ def extract_current_url(result: dict[str, Any]) -> str | None:
         if fallback:
             return fallback
     text = content_text(result)
-    current_lines = [line for line in text.splitlines() if "current" in line.lower()]
-    for line in current_lines or text.splitlines():
+    lines = text.splitlines()
+    page_lines = [line for line in lines if re.search(r"page url\s*:", line, re.IGNORECASE)]
+    current_lines = [line for line in lines if "current" in line.lower()]
+    for line in page_lines or current_lines or lines:
         match = _URL_RE.search(line)
         if match:
             return match.group(0)
@@ -261,8 +259,12 @@ class PlaywrightAssertionProxy:
             raise AutomationMCPError("tool_forbidden", f"Tool '{name}' is not authorized for this task")
         sanitized = self._sanitize_arguments(name, payload)
         self._enforce_navigation(name, sanitized)
-        result = await self.client.call_tool(name, sanitized)
-        return sanitize_tool_result(result if isinstance(result, dict) else {})
+        result = sanitize_tool_result(await self.client.call_tool(name, sanitized) or {})
+        if name in {"browser_navigate", "browser_navigate_back", "browser_click"} or (
+            name == "browser_tabs" and sanitized.get("action") == "new"
+        ):
+            await self._ensure_on_origin(result, navigate_back=name != "browser_navigate_back")
+        return result
 
     def _validate(self, name: str, arguments: dict[str, Any]) -> None:
         try:
@@ -294,6 +296,19 @@ class PlaywrightAssertionProxy:
             if not isinstance(url, str) or request_origin(url) != self.allowed_origin:
                 raise AutomationMCPError("origin_forbidden", "New tab URL is outside the allowed origin")
 
+    async def _ensure_on_origin(self, action_result: dict[str, Any], *, navigate_back: bool) -> None:
+        current = extract_page_location(action_result)
+        if not current:
+            tabs = await self._observe("browser_tabs", {"action": "list"})
+            current = extract_page_location(tabs)
+        if current and not _page_stays_on_origin(current, self.allowed_origin):
+            if navigate_back:
+                try:
+                    await self.client.call_tool("browser_navigate_back", {})
+                except Exception:
+                    pass
+            raise AutomationMCPError("origin_forbidden", "Navigation left the allowed origin")
+
     async def _observe(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = await self.client.call_tool(name, arguments)
         return sanitize_tool_result(result if isinstance(result, dict) else {})
@@ -305,7 +320,7 @@ class PlaywrightAssertionProxy:
                 raise AutomationMCPError("invalid_arguments", "expected text cannot be blank")
             observed = await self._observe("browser_snapshot", {})
             text = observation_text(observed)
-            return _assertion_result(expected in text, expected, text[:2000])
+            return _assertion_result(contains_phrase(text, expected), expected, text[:2000])
         if name == "browser_assert_visible":
             label = str(arguments["name"]).strip()
             if not label:
@@ -349,6 +364,12 @@ class PlaywrightAssertionProxy:
             if key in normalized and normalized[key] is not None
         }
         return _assertion_result(matched is not None, expected, actual)
+
+
+def _page_stays_on_origin(url: str, allowed_origin: str) -> bool:
+    if url.strip() == "about:blank":
+        return True
+    return request_origin(url) == allowed_origin
 
 
 def _find_network_match(requests: list[dict[str, Any]], arguments: dict[str, Any], allowed_origin: str) -> dict[str, Any] | None:

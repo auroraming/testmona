@@ -54,6 +54,15 @@ def _contains_inline_secret(value: Any) -> bool:
     return False
 
 
+def _validate_saved_origins(value: Optional[dict]) -> Optional[dict]:
+    if not value:
+        return value
+    from ..services.automation_origins import validate_origin_fields
+
+    validate_origin_fields(value)
+    return value
+
+
 class TestDebtItemBase(BaseModel):
     test_case_id: int = Field(..., ge=1)
     debt_type: str = Field(..., min_length=1, max_length=40)
@@ -515,6 +524,11 @@ class ExecutionEnvironmentBase(BaseModel):
 class ExecutionEnvironmentCreate(ExecutionEnvironmentBase):
     project_id: int
 
+    @field_validator("config_data")
+    @classmethod
+    def validate_target_origins(cls, value: Optional[dict]) -> Optional[dict]:
+        return _validate_saved_origins(value)
+
 
 class ExecutionEnvironmentUpdate(BaseModel):
     name: Optional[str] = None
@@ -523,6 +537,11 @@ class ExecutionEnvironmentUpdate(BaseModel):
     config_data: Optional[dict] = None
     build_info: Optional[dict] = None
     is_active: Optional[bool] = None
+
+    @field_validator("config_data")
+    @classmethod
+    def validate_target_origins(cls, value: Optional[dict]) -> Optional[dict]:
+        return _validate_saved_origins(value)
 
 
 class ExecutionEnvironment(ExecutionEnvironmentBase):
@@ -876,6 +895,9 @@ class AIAutomationTaskCreate(BaseModel):
             raise ValueError("config must use credential references and cannot contain inline secrets")
         if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
             raise ValueError("config cannot exceed 64 KB")
+        from ..services.automation_origins import validate_origin_fields
+
+        validate_origin_fields(value)
         return value
 
 

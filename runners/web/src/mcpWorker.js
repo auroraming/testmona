@@ -1,38 +1,69 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { normalizeHttpOrigin } from './assertionProxy.js';
 
 export const DEFAULT_PLAYWRIGHT_MCP_PACKAGE = '@playwright/mcp@0.0.83';
+export const REQUIRED_PLAYWRIGHT_CORE = '1.64.1';
 const PINNED_PACKAGE = /^@playwright\/mcp@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
-export function buildPlaywrightMcpArgs(packageRef, allowedOrigin) {
+export function assertPinnedMcpPackage(packageRef) {
   if (!PINNED_PACKAGE.test(packageRef)) {
     throw new Error('package_ref must pin an exact @playwright/mcp semantic version');
   }
-  const origin = normalizeHttpOrigin(allowedOrigin);
-  return ['--yes', packageRef, '--headless', '--isolated', '--browser=chrome', '--block-service-workers', `--allowed-origins=${origin}`, '--idle-timeout=300000'];
 }
 
+export function buildPlaywrightMcpArgs(allowedOrigin, outputDir, executablePath) {
+  const origin = normalizeHttpOrigin(allowedOrigin);
+  const args = [
+    '--headless',
+    '--isolated',
+    '--block-service-workers',
+    `--allowed-origins=${origin}`,
+    '--idle-timeout=300000',
+    '--image-responses=omit',
+    `--output-dir=${outputDir}`,
+  ];
+  if (executablePath) args.push(`--executable-path=${executablePath}`);
+  if (args.some((arg) => arg === '--browser=chrome' || arg.startsWith('--browser='))) {
+    throw new Error('Web Runner must use the image Chromium, not a browser channel');
+  }
+  return args;
+}
+
+/** @playwright/mcp@0.0.83 reads one JSON object per line, not LSP Content-Length frames. */
 export function encodeMessage(payload) {
-  const body = JSON.stringify(payload);
-  return `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+  return `${JSON.stringify(payload)}\n`;
 }
 
 export function createMessageParser(onMessage) {
   let buffer = Buffer.alloc(0);
   return (chunk) => {
     buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
-    while (buffer.length) {
-      const headerEnd = buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) return;
-      const match = /Content-Length:\s*(\d+)/iu.exec(buffer.subarray(0, headerEnd).toString('utf8'));
-      if (!match) throw new Error('MCP response missing Content-Length');
-      const length = Number(match[1]);
-      const start = headerEnd + 4;
-      if (buffer.length < start + length) return;
-      onMessage(JSON.parse(buffer.subarray(start, start + length).toString('utf8')));
-      buffer = buffer.subarray(start + length);
+    let newline = buffer.indexOf(0x0a);
+    while (newline !== -1) {
+      const line = buffer.subarray(0, newline).toString('utf8').replace(/\r$/u, '').trim();
+      buffer = buffer.subarray(newline + 1);
+      if (line) onMessage(JSON.parse(line));
+      newline = buffer.indexOf(0x0a);
     }
   };
+}
+
+export function resolveInstalledMcpCli(packageRef = process.env.TESTMONA_PLAYWRIGHT_MCP_PACKAGE || DEFAULT_PLAYWRIGHT_MCP_PACKAGE) {
+  assertPinnedMcpPackage(packageRef);
+  const require = createRequire(import.meta.url);
+  const installed = require('@playwright/mcp/package.json');
+  if (`@playwright/mcp@${installed.version}` !== packageRef) {
+    throw new Error(`Installed MCP @playwright/mcp@${installed.version} does not match ${packageRef}`);
+  }
+  const core = require('playwright-core/package.json');
+  if (core.version !== REQUIRED_PLAYWRIGHT_CORE) {
+    throw new Error(`Playwright MCP must use playwright-core ${REQUIRED_PLAYWRIGHT_CORE}, found ${core.version}`);
+  }
+  return path.join(path.dirname(require.resolve('@playwright/mcp/package.json')), 'cli.js');
 }
 
 export function createStdioMcpClient(child, timeoutMs = 30000) {
@@ -80,25 +111,33 @@ export function createStdioMcpClient(child, timeoutMs = 30000) {
 }
 
 export async function startPlaywrightMcpWorker({
-  packageRef,
+  packageRef = process.env.TESTMONA_PLAYWRIGHT_MCP_PACKAGE || DEFAULT_PLAYWRIGHT_MCP_PACKAGE,
   allowedOrigin,
-  workspace,
-  command = 'npx',
+  command = process.execPath,
   spawnImpl = spawn,
   clientFactory = null,
+  executablePath = process.env.TESTMONA_PLAYWRIGHT_EXECUTABLE || '',
 } = {}) {
-  const args = buildPlaywrightMcpArgs(packageRef, allowedOrigin);
-  const child = spawnImpl(command, args, { cwd: workspace, stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+  assertPinnedMcpPackage(packageRef);
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'testmona-mcp-'));
+  const toolArgs = buildPlaywrightMcpArgs(allowedOrigin, outputDir, executablePath || undefined);
+  const prefix = clientFactory ? [] : [resolveInstalledMcpCli(packageRef)];
+  const child = spawnImpl(command, [...prefix, ...toolArgs], {
+    cwd: outputDir,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.env,
+  });
   let stopped = false;
   const stop = async () => {
     if (stopped) return;
     stopped = true;
-    if (!child.killed) child.kill('SIGTERM');
+    if (child && !child.killed) child.kill('SIGTERM');
+    await rm(outputDir, { recursive: true, force: true });
   };
   try {
     const client = clientFactory ? clientFactory(child) : createStdioMcpClient(child);
     await client.health();
-    return { client, stop, args };
+    return { client, stop, args: toolArgs, outputDir };
   } catch (error) {
     await stop();
     throw error;

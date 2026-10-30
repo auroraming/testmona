@@ -539,3 +539,72 @@ def test_runner_completion_stops_at_token_budget(client, monkeypatch):
     assert response.status_code == 409
     assert "token budget" in response.json()["detail"]
     assert client.get(f"/ai-automation/tasks/{task['id']}").json()["status"] == "running"
+
+
+def test_expired_lease_cannot_complete_renew_or_pass(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import models
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("expired lease must not call the model")
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fail_if_called)
+    _runner, token = _register_runner(client, "mobile")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "mobile",
+        "goal": "Expired lease",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    with client.SessionLocal() as db:
+        row = db.query(models.AIAutomationTask).filter(models.AIAutomationTask.id == task["id"]).one()
+        row.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        db.commit()
+
+    completion = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide", "max_tokens": 50},
+    )
+    heartbeat = client.post("/internal/ai-automation/heartbeat", headers=headers, json={
+        "task_id": task["id"], "lease_token": lease["lease_token"],
+    })
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "passed", "result": {"summary": "no"}},
+    )
+    assert completion.status_code == 409
+    assert heartbeat.status_code == 409
+    assert report.status_code == 409
+    assert "expired" in completion.json()["detail"]
+    stored = client.get(f"/ai-automation/tasks/{task['id']}").json()
+    assert stored["status"] == "running"
+    assert stored["input_tokens"] == 0
+
+
+def test_invalid_target_origin_is_rejected_when_saved(client):
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Bad origin",
+        "config": {"app_url": "https://example.test/app"},
+    })
+    assert task.status_code == 422
+    assert "origin" in task.text
+    environment = client.post("/execution-environments/", json={
+        "name": "Unsafe",
+        "environment_type": "staging",
+        "project_id": client.project_id,
+        "config_data": {"base_url": "https://user:pass@example.test"},
+    })
+    assert environment.status_code == 422
+    saved = client.post("/execution-environments/", json={
+        "name": "Safe",
+        "environment_type": "staging",
+        "project_id": client.project_id,
+        "config_data": {"app_url": "https://example.test:443"},
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["config_data"]["app_url"] == "https://example.test:443"
