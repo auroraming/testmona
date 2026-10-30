@@ -12,7 +12,7 @@ async function run(lease) {
   const heartbeat = setInterval(() => protocol.heartbeat(lease).then((state) => { cancelled = state.cancel_requested; }).catch(console.error), 30000);
   try {
     const result = await executeApiScript({
-      baseUrl, script: lease.task.config?.script, shouldCancel: () => cancelled,
+      baseUrl, script: lease.task.config?.script, variables: lease.task.config?.variables || {}, shouldCancel: () => cancelled,
       emitEvidence: (item) => protocol.appendEvidence(lease, [item]),
     });
     return protocol.report(lease, result.cancelled ? 'cancelled' : result.passed ? 'passed' : 'failed', result, result.error);

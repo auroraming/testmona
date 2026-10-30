@@ -30,3 +30,22 @@ test('blocks requests that escape the configured origin', async () => {
   assert.equal(result.passed, false);
   assert.match(result.error, /configured base URL origin/);
 });
+
+test('substitutes variables and retries selected transient statuses', async () => {
+  let calls = 0;
+  const result = await executeApiScript({
+    baseUrl: 'https://api.example.test/', variables: { tenant: 'acme' }, sleep: async () => {},
+    script: [
+      { action: 'request', path: 'tenant/${tenant}', retries: 1 },
+      { action: 'assert_status', expected: 200 },
+    ],
+    fetchImpl: async (url) => {
+      calls += 1;
+      assert.equal(url.pathname, '/tenant/acme');
+      return new Response('{}', { status: calls === 1 ? 503 : 200 });
+    },
+    emitEvidence: async () => {},
+  });
+  assert.equal(result.passed, true);
+  assert.equal(calls, 2);
+});

@@ -13,7 +13,17 @@ export function validateApiScript(script) {
   });
 }
 
-export async function executeApiScript({ baseUrl, script, emitEvidence, fetchImpl = fetch, shouldCancel = () => false }) {
+function substitute(value, variables) {
+  if (typeof value === 'string') return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => {
+    if (!(name in variables)) throw new Error(`Missing API variable: ${name}`);
+    return String(variables[name]);
+  });
+  if (Array.isArray(value)) return value.map((item) => substitute(item, variables));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substitute(item, variables)]));
+  return value;
+}
+
+export async function executeApiScript({ baseUrl, script, variables = {}, emitEvidence, fetchImpl = fetch, shouldCancel = () => false, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const steps = validateApiScript(script);
   const origin = new URL(baseUrl).origin;
   let response = null;
@@ -27,17 +37,30 @@ export async function executeApiScript({ baseUrl, script, emitEvidence, fetchImp
     let payload = { action: step.action };
     try {
       if (step.action === 'request') {
-        const target = new URL(step.path || '/', baseUrl);
+        const resolved = substitute(step, variables);
+        const target = new URL(resolved.path || '/', baseUrl);
         if (target.origin !== origin) throw new Error('API request must stay within the configured base URL origin');
-        response = await fetchImpl(target, {
-          method: String(step.method || 'GET').toUpperCase(),
-          headers: { 'content-type': 'application/json', ...(step.headers || {}) },
-          body: step.body == null ? undefined : JSON.stringify(step.body),
-          signal: AbortSignal.timeout(Number(step.timeout_ms || 30000)),
-        });
+        const retries = Math.max(0, Math.min(3, Number(resolved.retries || 0)));
+        const retryStatuses = new Set(resolved.retry_on_status || [429, 502, 503, 504]);
+        let attempt = 0;
+        while (true) {
+          attempt += 1;
+          try {
+            response = await fetchImpl(target, {
+              method: String(resolved.method || 'GET').toUpperCase(),
+              headers: { 'content-type': 'application/json', ...(resolved.headers || {}) },
+              body: resolved.body == null ? undefined : JSON.stringify(resolved.body),
+              signal: AbortSignal.timeout(Number(resolved.timeout_ms || 30000)),
+            });
+            if (attempt > retries || !retryStatuses.has(response.status)) break;
+          } catch (error) {
+            if (attempt > retries) throw error;
+          }
+          await sleep(Math.min(2000, Number(resolved.retry_backoff_ms || 250) * (2 ** (attempt - 1))));
+        }
         const text = await response.text();
         try { responseBody = text ? JSON.parse(text) : null; } catch { responseBody = text; }
-        payload = { ...payload, method: step.method || 'GET', path: target.pathname, status_code: response.status };
+        payload = { ...payload, method: resolved.method || 'GET', path: target.pathname, status_code: response.status, attempts: attempt };
       } else {
         if (!response) throw new Error('Assertion requires a preceding request step');
         let expected; let actual;
