@@ -12,9 +12,9 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.orm import Session
 
-from .. import auth
+from .. import auth, rbac
 from ..database import get_db
-from ..models import User
+from ..models import TestCase, TestCaseSection, User
 from .base import router
 from .helpers import ensure_import_permission, get_test_suite_or_404
 
@@ -182,6 +182,57 @@ def _template_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def suite_to_workbook_bytes(db: Session, suite_id: int) -> bytes:
+    workbook = Workbook()
+    folders = workbook.active
+    folders.title = "Folders"
+    folders.append(FOLDER_HEADERS)
+    sections = db.query(TestCaseSection).filter(
+        TestCaseSection.test_suite_id == suite_id,
+        TestCaseSection.is_active.is_(True),
+    ).order_by(TestCaseSection.order_index, TestCaseSection.id).all()
+    section_ids = {section.id for section in sections}
+    for section in sections:
+        folders.append((
+            f"section-{section.id}",
+            f"section-{section.parent_section_id}" if section.parent_section_id in section_ids else "",
+            section.name,
+        ))
+
+    cases_sheet = workbook.create_sheet("Test Cases")
+    cases_sheet.append(CASE_HEADERS)
+    steps_sheet = workbook.create_sheet("Steps")
+    steps_sheet.append(STEP_HEADERS)
+    cases = db.query(TestCase).filter(
+        TestCase.test_suite_id == suite_id,
+        TestCase.is_deleted.is_(False),
+    ).order_by(TestCase.order_index, TestCase.id).all()
+    for test_case in cases:
+        case_key = f"case-{test_case.id}"
+        cases_sheet.append((
+            case_key,
+            f"section-{test_case.section_id}" if test_case.section_id in section_ids else "",
+            test_case.title,
+            test_case.priority or "medium",
+            test_case.test_type or "manual",
+            test_case.description or "",
+            test_case.preconditions or "",
+            bool(test_case.is_multistep),
+        ))
+        if test_case.is_multistep:
+            ordered_steps = sorted(test_case.test_steps, key=lambda step: (step.order_index, step.step_number, step.id))
+            for step in ordered_steps:
+                steps_sheet.append((case_key, step.step_number, step.action, step.expected_result, step.step_type or "manual"))
+        elif test_case.steps or test_case.expected_result:
+            steps_sheet.append((case_key, 1, test_case.steps or "", test_case.expected_result or "", "manual"))
+    instructions = workbook.create_sheet("Instructions")
+    instructions.append(("TestMona reversible XLSX export",))
+    instructions.append(("Keys identify rows only within this workbook and are never trusted as database IDs during import.",))
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 @router.get("/templates/test-case-mindmap.xlsx")
 def download_mindmap_xlsx_template(current_user: User = Depends(auth.get_current_active_user)):
     del current_user
@@ -189,6 +240,22 @@ def download_mindmap_xlsx_template(current_user: User = Depends(auth.get_current
         content=_template_bytes(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="testmona-test-case-template.xlsx"'},
+    )
+
+
+@router.get("/export/test-cases/mindmap-xlsx")
+def export_mindmap_xlsx(
+    test_suite_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_active_user),
+):
+    suite = get_test_suite_or_404(db, test_suite_id)
+    if not rbac.has_permission(current_user, "read", suite.project_id, db):
+        raise HTTPException(status_code=403, detail="Not authorized to export test cases for this project")
+    return Response(
+        content=suite_to_workbook_bytes(db, suite.id),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="test-suite-{suite.id}.xlsx"'},
     )
 
 

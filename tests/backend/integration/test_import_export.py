@@ -261,6 +261,28 @@ def test_mindmap_xlsx_template_converts_to_versioned_json(client):
     assert preview.json()["new_section_count"] == 2
     assert preview.json()["would_create_count"] == 1
 
+    committed = client.post("/import-export/import/test-cases/mindmap-json", json={
+        "test_suite_id": client.suite_id,
+        "document": document,
+        "dry_run": False,
+    }, headers={"Idempotency-Key": "xlsx-roundtrip"})
+    assert committed.status_code == 200, committed.text
+
+    exported = client.get(f"/import-export/export/test-cases/mindmap-xlsx?test_suite_id={client.suite_id}")
+    assert exported.status_code == 200, exported.text
+    reconverted = client.post(
+        f"/import-export/import/test-cases/mindmap-xlsx/convert?test_suite_id={client.suite_id}",
+        files={"file": ("roundtrip.xlsx", exported.content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert reconverted.status_code == 200, reconverted.text
+    roundtrip = reconverted.json()["document"]
+    assert roundtrip["sections"][0]["children"][0]["name"] == "Refund"
+    assert roundtrip["test_cases"][0]["title"] == "Refund a paid order"
+    assert roundtrip["test_cases"][0]["preconditions"] == "Order is paid"
+    assert [step["expected_result"] for step in roundtrip["test_cases"][0]["steps"]] == [
+        "Order details open", "Refund is created",
+    ]
+
 
 def test_mindmap_xlsx_rejects_formula_and_unknown_step_case(client):
     from io import BytesIO

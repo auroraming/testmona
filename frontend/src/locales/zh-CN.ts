@@ -115,6 +115,7 @@ export const zhCN: typeof en = {
   "mindmapImportInvalid": "无效的 TestMona 脑图 JSON 文件。",
   "mindmapImportSuccess": "已导入 {count} 条测试用例。",
   "mindmapDownloadXlsxTemplate": "下载 XLSX 模板",
+  "mindmapExportXlsx": "导出 XLSX",
   "aiAutomation": "AI 自动化",
   "aiAutomationDescription": "创建并跟踪 Web、Mobile 与 API 自动化任务。",
   "aiAutomationCreate": "创建任务",

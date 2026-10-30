@@ -92,6 +92,7 @@ type Props = {
     importInvalid: string;
     testCases: string;
     downloadXlsxTemplate: string;
+    exportXlsx: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -117,6 +118,7 @@ type Props = {
   ) => Promise<MindmapJsonImportResult>;
   onConvertXlsx: (file: File) => Promise<{ document: Record<string, unknown>; warnings: string[] }>;
   onDownloadXlsxTemplate: () => Promise<Blob>;
+  onExportXlsx: () => Promise<Blob>;
   onOpenCase: (testCaseId: number) => void;
   navigationGuardRef: MutableRefObject<(action: () => void) => void>;
 };
@@ -158,6 +160,7 @@ export function TestCaseMindmapView({
   onImportJson,
   onConvertXlsx,
   onDownloadXlsxTemplate,
+  onExportXlsx,
   onOpenCase,
   navigationGuardRef,
 }: Props) {
@@ -853,6 +856,18 @@ export function TestCaseMindmapView({
       setImporting(false);
     }
   };
+  const exportXlsx = async () => {
+    setExporting(true);
+    try {
+      const safeName = suiteName.replace(/[\\/:*?"<>|]+/g, '-').trim() || `suite-${suiteId}`;
+      saveAs(await onExportXlsx(), `${safeName}-test-cases.xlsx`);
+    } catch (error) {
+      setImportDialogOpen(true);
+      setImportError(error instanceof Error ? error.message : labels.importInvalid);
+    } finally {
+      setExporting(false);
+    }
+  };
   const commitJsonImport = async () => {
     if (!importDocument) return;
     setImporting(true);
@@ -912,6 +927,7 @@ export function TestCaseMindmapView({
           <Button size="icon" variant="ghost" title={labels.fit} onClick={() => instanceRef.current?.scaleFit()}><Expand className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           <Button size="sm" variant="ghost" onClick={() => void exportJson()} disabled={exporting}><Download className="mr-1 h-4 w-4" />{labels.exportJson}</Button>
+          <Button size="sm" variant="ghost" onClick={() => void exportXlsx()} disabled={exporting}><FileSpreadsheet className="mr-1 h-4 w-4" />{labels.exportXlsx}</Button>
           {canWrite && <>
             <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void selectJsonImport(event.target.files?.[0])} />
             <Button size="sm" variant="ghost" onClick={() => importInputRef.current?.click()} disabled={importing}><Upload className="mr-1 h-4 w-4" />{labels.importJson}</Button>

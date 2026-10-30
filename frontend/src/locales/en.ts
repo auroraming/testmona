@@ -121,6 +121,7 @@ export const en = {
   mindmapImportInvalid: 'Invalid TestMona mind-map JSON file.',
   mindmapImportSuccess: 'Imported {count} test cases.',
   mindmapDownloadXlsxTemplate: 'Download XLSX template',
+  mindmapExportXlsx: 'Export XLSX',
   aiAutomation: 'AI Automation',
   aiAutomationDescription: 'Create and monitor Web, Mobile, and API automation tasks.',
   aiAutomationCreate: 'Create task',

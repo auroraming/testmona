@@ -2981,6 +2981,15 @@ export function TestCases() {
     return response.data as Blob;
   };
 
+  const exportMindmapXlsx = async () => {
+    if (!currentTestSuiteId) throw new Error(t('mindmapImportInvalid'));
+    const response = await api.get(
+      `/import-export/export/test-cases/mindmap-xlsx?test_suite_id=${currentTestSuiteId}`,
+      { responseType: 'blob' },
+    );
+    return response.data as Blob;
+  };
+
   const openRecycleBin = async () => {
     if (!currentProjectId) return;
     setRecycleBinOpen(true);
@@ -4480,6 +4489,7 @@ export function TestCases() {
                 importInvalid: t('mindmapImportInvalid'),
                 testCases: t('testCases'),
                 downloadXlsxTemplate: t('mindmapDownloadXlsxTemplate'),
+                exportXlsx: t('mindmapExportXlsx'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
@@ -4495,6 +4505,7 @@ export function TestCases() {
               onImportJson={importMindmapJson}
               onConvertXlsx={convertMindmapXlsx}
               onDownloadXlsxTemplate={downloadMindmapXlsxTemplate}
+              onExportXlsx={exportMindmapXlsx}
               onOpenCase={(testCaseId) => mindmapNavigationGuardRef.current(() => navigate(getTestCaseDetailUrl(testCaseId)))}
               navigationGuardRef={mindmapNavigationGuardRef}
             />
