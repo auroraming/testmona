@@ -10,6 +10,9 @@ them with the task lease, injects them in memory, and redacts them from
 evidence. Transient 429/502/503/504 responses use bounded exponential backoff.
 401 and 403 are not retried. OpenAPI documents can be materialized into this
 script shape; the API archives `passed` only when explicit assertions succeed.
+Generated requests include safe sample values for required path/query parameters
+and required JSON-body fields. Header/cookie credentials and secret-named fields
+remain explicit credential references rather than being copied into scripts.
 OpenAPI/Swagger JSON response schemas are reduced to a bounded validation
 subset (`type`, `required`, `properties`, `items`, `enum`, composition, and
 `additionalProperties`). Validation is capped at 20 levels and 500 nodes;

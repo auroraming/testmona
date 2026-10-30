@@ -159,6 +159,30 @@ def test_reviewed_api_script_keeps_header_and_schema_assertions():
     assert steps[2] == {"action": "assert_json_schema", "schema": schema}
 
 
+def test_openapi_script_materializes_required_request_data_without_credentials():
+    generated = materialize_api_scripts({
+        "openapi": "3.0.3",
+        "info": {"title": "Create item", "version": "1"},
+        "paths": {"/tenants/{tenant}/items": {"post": {
+            "parameters": [
+                {"name": "tenant", "in": "path", "required": True, "schema": {"type": "string", "example": "demo"}},
+                {"name": "limit", "in": "query", "required": True, "schema": {"type": "integer", "default": 10}},
+                {"name": "api_key", "in": "query", "required": True, "schema": {"type": "string", "example": "do-not-copy"}},
+            ],
+            "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                "type": "object", "required": ["name", "password"],
+                "properties": {"name": {"type": "string", "example": "book"}, "password": {"type": "string"}},
+            }}}},
+            "responses": {"201": {"description": "created"}},
+        }}},
+    })
+    request = generated["scripts"][0]["script"][0]
+    assert request["path"] == "/tenants/demo/items?limit=10"
+    assert request["body"] == {"name": "book"}
+    assert "do-not-copy" not in str(generated)
+    assert any("credential" in warning for warning in generated["warnings"])
+
+
 def test_device_lock_is_exclusive_and_offline_reclaim_clears_it():
     now = datetime.now(timezone.utc)
     device = SimpleNamespace(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException
 
@@ -23,6 +24,7 @@ _SCHEMA_KEYS = {
 }
 _MAX_SCHEMA_NODES = 500
 _MAX_SCHEMA_DEPTH = 20
+_SENSITIVE_NAMES = {"authorization", "api_key", "apikey", "token", "secret", "password"}
 
 
 def _success_status(responses: dict[str, Any]) -> tuple[int, str | None]:
@@ -101,6 +103,73 @@ def _materialize_schema(
     return result
 
 
+def _sample_value(document: dict[str, Any], schema: dict[str, Any], name: str = "", depth: int = 0) -> Any:
+    if depth > 8 or any(part in name.lower() for part in _SENSITIVE_NAMES):
+        return None
+    if isinstance(schema.get("$ref"), str):
+        return _sample_value(document, _local_ref(document, schema["$ref"]), name, depth + 1)
+    for key in ("example", "default"):
+        if key in schema:
+            return schema[key]
+    if isinstance(schema.get("enum"), list) and schema["enum"]:
+        return schema["enum"][0]
+    schema_type = schema.get("type")
+    if schema_type == "object" or isinstance(schema.get("properties"), dict):
+        required = set(schema.get("required") or [])
+        return {
+            key: value
+            for key, child in (schema.get("properties") or {}).items()
+            if key in required and isinstance(child, dict)
+            and (value := _sample_value(document, child, key, depth + 1)) is not None
+        }
+    if schema_type == "array" and isinstance(schema.get("items"), dict):
+        value = _sample_value(document, schema["items"], name, depth + 1)
+        return [] if value is None else [value]
+    return {"integer": 1, "number": 1, "boolean": True, "string": "test"}.get(schema_type, "test")
+
+
+def _request_data(
+    document: dict[str, Any], path: str, path_item: dict[str, Any], operation: dict[str, Any], warnings: list[str],
+) -> tuple[str, Any | None]:
+    inherited = path_item.get("parameters") if isinstance(path_item.get("parameters"), list) else []
+    own = operation.get("parameters") if isinstance(operation.get("parameters"), list) else []
+    parameters = [
+        item for item in (*inherited, *own)
+        if isinstance(item, dict)
+    ]
+    resolved_path = path
+    query: dict[str, Any] = {}
+    body = None
+    for parameter in parameters:
+        if isinstance(parameter.get("$ref"), str):
+            parameter = _local_ref(document, parameter["$ref"])
+        name = str(parameter.get("name") or "")
+        location = parameter.get("in")
+        if not name or not parameter.get("required") or location not in {"path", "query", "body"}:
+            continue
+        schema = parameter.get("schema") if isinstance(parameter.get("schema"), dict) else parameter
+        value = _sample_value(document, schema, name)
+        if value is None:
+            warnings.append(f"Required {location} parameter {name} was omitted because it may contain a credential")
+        elif location == "path":
+            resolved_path = resolved_path.replace("{" + name + "}", quote(str(value), safe=""))
+        elif location == "query":
+            query[name] = value
+        else:  # Swagger 2.0 body parameter
+            body = value
+    request_body = operation.get("requestBody")
+    if isinstance(request_body, dict):
+        if isinstance(request_body.get("$ref"), str):
+            request_body = _local_ref(document, request_body["$ref"])
+        media = (request_body.get("content") or {}).get("application/json")
+        if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+            body = _sample_value(document, media["schema"])
+    resolved_path = _PATH_PARAM.sub("1", resolved_path)
+    if query:
+        resolved_path += ("&" if "?" in resolved_path else "?") + urlencode(query, doseq=True)
+    return resolved_path, body
+
+
 def materialize_api_scripts(document: dict[str, Any], credential_ref: str | None = None) -> dict[str, Any]:
     """Validate the document with the existing safe parser, then emit runner scripts."""
     if not isinstance(document, dict):
@@ -120,7 +189,7 @@ def materialize_api_scripts(document: dict[str, Any], credential_ref: str | None
             if warning:
                 warnings.append(f"{method.upper()} {path}: {warning}")
             response = responses.get(str(expected)) if isinstance(responses.get(str(expected)), dict) else None
-            safe_path = _PATH_PARAM.sub("1", str(path))
+            safe_path, request_body = _request_data(document, str(path), path_item, operation, warnings)
             step: dict[str, Any] = {
                 "action": "request",
                 "method": method.upper(),
@@ -129,6 +198,8 @@ def materialize_api_scripts(document: dict[str, Any], credential_ref: str | None
                 "retries": 2,
                 "retry_backoff_ms": 250,
             }
+            if request_body is not None:
+                step["body"] = request_body
             needs_credential = _has_security(document, operation)
             script = [step, {"action": "assert_status", "expected": expected}]
             schema = _response_schema(response) if response else None
