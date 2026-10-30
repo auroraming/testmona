@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import MindElixir, { type MindElixirData, type MindElixirInstance, type NodeObj } from 'mind-elixir';
 import 'mind-elixir/style.css';
-import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Download, Edit, Expand, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Download, Edit, Expand, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, Upload, X } from 'lucide-react';
 import { saveAs } from 'file-saver';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -32,6 +32,15 @@ type CaseDraft = Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'exp
 type CaseStepDraft = { step_number: number; action: string; expected_result: string; step_type: string };
 type DraftState = { caseDraft: CaseDraft; stepDrafts: CaseStepDraft[] };
 type HistoryCommand = { undo: () => Promise<unknown>; redo: () => Promise<unknown> };
+type MindmapJsonImportResult = {
+  section_count: number;
+  new_section_count: number;
+  test_case_count: number;
+  duplicate_count: number;
+  would_create_count: number;
+  warnings: string[];
+  created_count?: number;
+};
 
 const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '', expected_result: '', priority: 'medium' };
 const CASE_BATCH_SIZE = 500;
@@ -73,6 +82,15 @@ type Props = {
     discard: string;
     loadMore: string;
     exportJson: string;
+    importJson: string;
+    importPreviewTitle: string;
+    importConfirm: string;
+    skipDuplicates: string;
+    copyDuplicates: string;
+    newSections: string;
+    duplicates: string;
+    importInvalid: string;
+    testCases: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -90,6 +108,12 @@ type Props = {
   onUpdateCaseSteps: (testCaseId: number, steps: CaseStepDraft[], expectedUpdatedAt?: string) => Promise<void>;
   onCopyNode: (node: ActionNode, targetSectionId: number | null) => Promise<void>;
   onDeleteNode: (node: ActionNode) => Promise<void>;
+  onImportJson: (
+    document: Record<string, unknown>,
+    duplicateMode: 'skip' | 'copy',
+    dryRun: boolean,
+    idempotencyKey: string,
+  ) => Promise<MindmapJsonImportResult>;
   onOpenCase: (testCaseId: number) => void;
   navigationGuardRef: MutableRefObject<(action: () => void) => void>;
 };
@@ -128,6 +152,7 @@ export function TestCaseMindmapView({
   onUpdateCaseSteps,
   onCopyNode,
   onDeleteNode,
+  onImportJson,
   onOpenCase,
   navigationGuardRef,
 }: Props) {
@@ -140,6 +165,14 @@ export function TestCaseMindmapView({
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importDocument, setImportDocument] = useState<Record<string, unknown> | null>(null);
+  const [importPreview, setImportPreview] = useState<MindmapJsonImportResult | null>(null);
+  const [importError, setImportError] = useState('');
+  const [duplicateMode, setDuplicateMode] = useState<'skip' | 'copy'>('skip');
+  const [importKey, setImportKey] = useState('');
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [syncing, setSyncing] = useState(false);
   const [sectionParentId, setSectionParentId] = useState<number | null>(null);
   const [caseDraft, setCaseDraft] = useState<CaseDraft>(emptyCaseDraft);
@@ -762,6 +795,57 @@ export function TestCaseMindmapView({
       setExporting(false);
     }
   };
+  const previewJsonImport = async (document: Record<string, unknown>, mode: 'skip' | 'copy', key: string) => {
+    setImporting(true);
+    setImportError('');
+    try {
+      setImportPreview(await onImportJson(document, mode, true, key));
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : labels.importInvalid);
+    } finally {
+      setImporting(false);
+    }
+  };
+  const selectJsonImport = async (file?: File) => {
+    if (!file) return;
+    setImportDialogOpen(true);
+    setImportError('');
+    try {
+      if (file.size > 10 * 1024 * 1024) throw new Error(labels.importInvalid);
+      const parsed = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(labels.importInvalid);
+      const key = crypto.randomUUID();
+      setImportDocument(parsed as Record<string, unknown>);
+      setImportKey(key);
+      setDuplicateMode('skip');
+      await previewJsonImport(parsed as Record<string, unknown>, 'skip', key);
+    } catch (error) {
+      setImportPreview(null);
+      setImportDocument(null);
+      setImportError(error instanceof Error ? error.message : labels.importInvalid);
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
+  const changeDuplicateMode = async (mode: 'skip' | 'copy') => {
+    setDuplicateMode(mode);
+    if (importDocument) await previewJsonImport(importDocument, mode, importKey);
+  };
+  const commitJsonImport = async () => {
+    if (!importDocument) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      await onImportJson(importDocument, duplicateMode, false, importKey);
+      setImportPreview(null);
+      setImportDocument(null);
+      setImportDialogOpen(false);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : labels.importInvalid);
+    } finally {
+      setImporting(false);
+    }
+  };
   const continueWithSelection = () => {
     dirtyRef.current = false;
     setSelected(pendingSelection);
@@ -805,11 +889,41 @@ export function TestCaseMindmapView({
           <Button size="icon" variant="ghost" title={labels.fit} onClick={() => instanceRef.current?.scaleFit()}><Expand className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           <Button size="sm" variant="ghost" onClick={() => void exportJson()} disabled={exporting}><Download className="mr-1 h-4 w-4" />{labels.exportJson}</Button>
+          {canWrite && <>
+            <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void selectJsonImport(event.target.files?.[0])} />
+            <Button size="sm" variant="ghost" onClick={() => importInputRef.current?.click()} disabled={importing}><Upload className="mr-1 h-4 w-4" />{labels.importJson}</Button>
+          </>}
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
           {canWrite && <Button size="sm" variant="ghost" onClick={() => onCreateCase(selected?.kind === 'section' ? selected.id : null)}><Plus className="mr-1 h-4 w-4" />{labels.addCase}</Button>}
           {visibleCaseLimit < testCases.length && <Button size="sm" variant="ghost" onClick={() => setVisibleCaseLimit((current) => Math.min(current + CASE_BATCH_SIZE, testCases.length))}>{labels.loadMore} ({Math.min(visibleCaseLimit, testCases.length)}/{testCases.length})</Button>}
         </div>
       </div>
+
+      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!importing) { setImportDialogOpen(open); if (!open) { setImportDocument(null); setImportPreview(null); setImportError(''); } } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{labels.importPreviewTitle}</DialogTitle></DialogHeader>
+          {importPreview && <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-2 gap-2 rounded-md border p-3">
+              <span>{labels.newSections}</span><strong>{importPreview.new_section_count}</strong>
+              <span>{labels.testCases}</span><strong>{importPreview.test_case_count}</strong>
+              <span>{labels.duplicates}</span><strong>{importPreview.duplicate_count}</strong>
+            </div>
+            <Select value={duplicateMode} onValueChange={(value) => void changeDuplicateMode(value as 'skip' | 'copy')} disabled={importing}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="skip">{labels.skipDuplicates}</SelectItem>
+                <SelectItem value="copy">{labels.copyDuplicates}</SelectItem>
+              </SelectContent>
+            </Select>
+            {importPreview.warnings.length > 0 && <ul className="max-h-32 overflow-y-auto text-xs text-amber-700">{importPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+          </div>}
+          {importError && <p className="text-sm text-destructive">{importError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportDocument(null); setImportPreview(null); setImportError(''); }} disabled={importing}>{labels.cancel}</Button>
+            <Button onClick={() => void commitJsonImport()} disabled={!importPreview || importing}>{labels.importConfirm}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {selected && detailOpen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => navigationGuardRef.current(() => setDetailOpen(false))} />}
       <aside className={`${detailOpen ? 'fixed' : 'hidden'} inset-y-4 right-4 z-50 w-[min(90vw,360px)] overflow-y-auto rounded-lg border bg-card p-4 shadow-xl xl:static xl:z-auto xl:block xl:w-auto xl:max-h-[calc(100vh-18rem)] xl:shadow-none`}>

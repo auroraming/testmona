@@ -133,6 +133,109 @@ def test_real_import_idempotency_still_dedupes(client):
     assert second.json()["created_ids"] == first.json()["created_ids"]
 
 
+def test_mindmap_json_preview_commit_and_idempotency(client):
+    from app import models
+
+    document = {
+        "format": "testmona.test-case-mindmap",
+        "version": 1,
+        "suite": {"id": 999, "name": "Source"},
+        "sections": [{
+            "id": 10, "name": "Checkout", "parent_id": None,
+            "children": [{"id": 11, "name": "Refund", "parent_id": 10, "children": []}],
+        }],
+        "test_cases": [{
+            "id": 100, "section_id": 10, "title": "Pay by card", "priority": "high",
+            "test_type": "manual", "description": "Card payment", "preconditions": "Cart exists",
+            "is_multistep": False,
+            "steps": [{"step_number": 1, "action": "Submit payment", "expected_result": "Paid", "step_type": "manual"}],
+        }, {
+            "id": 101, "section_id": 11, "title": "Refund order", "priority": "medium",
+            "test_type": "regression", "description": "", "preconditions": "Order paid",
+            "is_multistep": True,
+            "steps": [
+                {"step_number": 1, "action": "Open order", "expected_result": "Order opens", "step_type": "manual"},
+                {"step_number": 2, "action": "Refund", "expected_result": "Refund created", "step_type": "verification"},
+            ],
+        }],
+    }
+    endpoint = "/import-export/import/test-cases/mindmap-json"
+    preview = client.post(endpoint, json={"test_suite_id": client.suite_id, "document": document, "dry_run": True})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["section_count"] == 2
+    assert preview.json()["test_case_count"] == 2
+    with client.SessionLocal() as db:
+        assert db.query(models.TestCase).count() == 0
+        assert db.query(models.TestCaseSection).count() == 0
+
+    payload = {"test_suite_id": client.suite_id, "document": document, "dry_run": False}
+    first = client.post(endpoint, json=payload, headers={"Idempotency-Key": "mindmap-json-1"})
+    assert first.status_code == 200, first.text
+    assert first.json()["created_count"] == 2
+    repeated = client.post(endpoint, json=payload, headers={"Idempotency-Key": "mindmap-json-1"})
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["created_ids"] == first.json()["created_ids"]
+
+    with client.SessionLocal() as db:
+        cases = db.query(models.TestCase).order_by(models.TestCase.id).all()
+        assert [case.title for case in cases] == ["Pay by card", "Refund order"]
+        assert cases[0].steps == "Submit payment"
+        assert cases[1].is_multistep is True
+        assert [step.action for step in cases[1].test_steps] == ["Open order", "Refund"]
+        sections = db.query(models.TestCaseSection).order_by(models.TestCaseSection.id).all()
+        assert sections[1].parent_section_id == sections[0].id
+        assert cases[0].section_id == sections[0].id
+        assert cases[1].section_id == sections[1].id
+
+
+def test_mindmap_json_duplicate_modes_and_validation(client):
+    endpoint = "/import-export/import/test-cases/mindmap-json"
+    document = {
+        "format": "testmona.test-case-mindmap", "version": 1, "sections": [],
+        "test_cases": [{"id": 1, "title": "Same title", "steps": []}],
+    }
+    base = {"test_suite_id": client.suite_id, "document": document, "dry_run": False}
+    assert client.post(endpoint, json=base, headers={"Idempotency-Key": "json-base"}).json()["created_count"] == 1
+    skipped = client.post(endpoint, json=base, headers={"Idempotency-Key": "json-skip"})
+    assert skipped.json()["created_count"] == 0
+    assert skipped.json()["skipped_count"] == 1
+    copied = client.post(endpoint, json={**base, "duplicate_mode": "copy"}, headers={"Idempotency-Key": "json-copy"})
+    assert copied.json()["created_count"] == 1
+
+    invalid = client.post(endpoint, json={
+        "test_suite_id": client.suite_id,
+        "document": {"format": "unknown", "version": 1, "sections": [], "test_cases": []},
+    })
+    assert invalid.status_code == 400
+
+    duplicate_preview = client.post(endpoint, json={
+        "test_suite_id": client.suite_id,
+        "document": {
+            "format": "testmona.test-case-mindmap", "version": 1, "sections": [],
+            "test_cases": [
+                {"id": 2, "title": "Incoming duplicate", "steps": []},
+                {"id": 3, "title": "incoming DUPLICATE", "steps": []},
+            ],
+        },
+    })
+    assert duplicate_preview.status_code == 200, duplicate_preview.text
+    assert duplicate_preview.json()["duplicate_count"] == 1
+    assert duplicate_preview.json()["would_create_count"] == 1
+
+    invalid_steps = client.post(endpoint, json={
+        "test_suite_id": client.suite_id,
+        "document": {
+            "format": "testmona.test-case-mindmap", "version": 1, "sections": [],
+            "test_cases": [{
+                "id": 4, "title": "Broken steps", "is_multistep": True,
+                "steps": [{"step_number": 1, "action": "", "expected_result": "Done"}],
+            }],
+        },
+    })
+    assert invalid_steps.status_code == 400
+    assert "action is required" in invalid_steps.json()["detail"]
+
+
 def test_export_roundtrips_multistep_and_flags(client):
     """Exported CSV must re-import cleanly (is_multistep/order_index/dates)."""
     multistep = (

@@ -2937,6 +2937,30 @@ export function TestCases() {
     });
   };
 
+  const importMindmapJson = async (
+    document: Record<string, unknown>,
+    duplicateMode: 'skip' | 'copy',
+    dryRun: boolean,
+    idempotencyKey: string,
+  ) => {
+    if (!currentTestSuiteId) throw new Error(t('mindmapImportInvalid'));
+    try {
+      const response = await api.post('/import-export/import/test-cases/mindmap-json', {
+        test_suite_id: currentTestSuiteId,
+        document,
+        duplicate_mode: duplicateMode,
+        dry_run: dryRun,
+      }, dryRun ? undefined : { headers: { 'Idempotency-Key': idempotencyKey } });
+      if (!dryRun) {
+        await Promise.all([loadTestCases(), loadSections()]);
+        toast({ title: t('success'), description: t('mindmapImportSuccess', { count: response.data.created_count || 0 }) });
+      }
+      return response.data;
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error, t('mindmapImportInvalid')));
+    }
+  };
+
   const openRecycleBin = async () => {
     if (!currentProjectId) return;
     setRecycleBinOpen(true);
@@ -4426,6 +4450,15 @@ export function TestCases() {
                 discard: t('discard'),
                 loadMore: t('loadMore'),
                 exportJson: t('mindmapExportJson'),
+                importJson: t('mindmapImportJson'),
+                importPreviewTitle: t('mindmapImportPreviewTitle'),
+                importConfirm: t('mindmapImportConfirm'),
+                skipDuplicates: t('mindmapImportSkipDuplicates'),
+                copyDuplicates: t('mindmapImportCopyDuplicates'),
+                newSections: t('mindmapImportNewSections'),
+                duplicates: t('mindmapImportDuplicates'),
+                importInvalid: t('mindmapImportInvalid'),
+                testCases: t('testCases'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
@@ -4438,6 +4471,7 @@ export function TestCases() {
               onUpdateCaseSteps={updateMindmapCaseSteps}
               onCopyNode={copyMindmapNode}
               onDeleteNode={deleteMindmapNode}
+              onImportJson={importMindmapJson}
               onOpenCase={(testCaseId) => mindmapNavigationGuardRef.current(() => navigate(getTestCaseDetailUrl(testCaseId)))}
               navigationGuardRef={mindmapNavigationGuardRef}
             />
