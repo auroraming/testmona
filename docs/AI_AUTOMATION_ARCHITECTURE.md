@@ -129,13 +129,17 @@ executor; the Python helper follows the same origin and assertion rules.
 The optional `api-runner` Compose profile uses the same lease, heartbeat,
 evidence, and report protocol. Fixed scripts issue requests only to relative
 paths under the configured environment origin and record network observations
-plus independent status, JSON-path, and header assertions. A successful HTTP
+plus independent status, JSON-path, header, and bounded OpenAPI response-schema
+assertions. OpenAPI/Swagger scripts include safe required path/query/body data.
+A successful HTTP
 round trip never passes a task without assertions. Credential references are
 encrypted at rest and resolved only for the active lease; evidence and audit
 records store the reference name. Transient statuses retry with capped
 backoff, while 401 and 403 do not. OpenAPI documents can be turned into this
 script shape. Native runner output and an API MCP observation both normalize
-to `testmona.api_result.v1`. A live API MCP server has not been compared.
+to `testmona.api_result.v1`. The read-only, non-root container completed a live
+HTTP smoke run with four independent assertions. A live API MCP server has not
+been compared.
 
 ## Mobile Runner baseline
 

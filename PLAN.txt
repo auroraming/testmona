@@ -66,7 +66,7 @@ AI 自动化交付阶段：
   - [ ] 验收：在至少一台 Android 和一台 iOS 可用设备上执行用例并回传截图、步骤和错误；无法提供某类设备时记录环境限制而非虚假通过。
   - [x] 固定脚本基础支持 tap、type、swipe、截图触发、文本与可见性断言；没有显式断言时禁止通过。
 - [ ] AI-V1.3：API Agent PoC + 原生 HTTP Runner + 报告。
-  - [ ] 复用现有 OpenAPI/Swagger 导入结果生成请求、断言和边界场景；凭据通过安全引用注入，不写入用例正文或日志。
+  - [x] 复用现有 OpenAPI/Swagger 导入结果生成请求、断言和边界场景；凭据通过安全引用注入，不写入用例正文或日志。
   - [ ] API MCP 与原生 HTTP Runner 对同一用例输出统一结果结构，并支持接口级超时、重试、脱敏和环境变量。
     - [x] 原生 HTTP Runner 基础：独立容器执行相对环境 Base URL 的请求，禁止单步骤跨 Origin；支持接口超时、状态码、JSON 路径和响应头独立断言，并回传网络/断言证据。
     - [x] 增加安全凭据引用注入、重试/退避和 OpenAPI 生成脚本。凭据加密保存，只在有效租约下解析，证据和审计不记录明文。429/502/503/504 有上限退避，401/403 不重试。原生 HTTP 与 API MCP 观察共用 `testmona.api_result.v1`；尚未连接真实 API MCP，不宣称端到端一致。
@@ -131,6 +131,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：完成 API Runner Docker/真实 HTTP 烟测。独立 Node 22 Alpine 镜像在 `node` 用户、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、0.5 CPU/256 MiB 限制下，对容器内临时 HTTP 服务完成请求、状态码、Header、JSON Path 和响应 Schema 共 4 个断言，产生 5 条证据并返回 `testmona.api_result.v1`。Compose 固化只读根。API MCP 对照与关联真实测试轮次仍未勾。
 - 2026-10-30：完成 Web Runner Docker/Chromium 实机烟测。锁定 Playwright 1.64.1 / Chromium 1248 的镜像成功构建；在 `pwuser`、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、1 CPU/1 GiB 限制下启动真实 Chromium，文本与可见性 2 个断言及截图证据通过。Compose 固化只读根与限额 tmpfs。完整登录态任务经后端入队、租约、制品回传的端到端仍待专用环境验收。
 - 2026-10-30：OpenAPI/Swagger 固定脚本生成补齐请求数据。必填 path/query 参数会使用规范中的安全示例或基础类型值，`application/json` 请求体与 Swagger 2 body 参数只生成必填的非敏感字段；Header/Cookie 和敏感命名字段仍由凭据引用处理，不复制进脚本。相关 OpenAPI/自动化平台 33 项测试通过。未增加随机数据生成器或可选字段策略。
 - 2026-10-30：API Runner 增加 OpenAPI/Swagger 响应结构断言。脚本生成器会展开本地 `$ref`，把 JSON 响应 Schema 的安全子集写为 `assert_json_schema`；原生 Runner 验证类型、必填字段、属性、数组、枚举和组合规则，只记录匹配结果与错误路径，不把响应正文写入证据。生成端和 Runner 均限制 20 层、500 节点。API Runner 6 项及 OpenAPI/平台服务 21 项测试通过；真实目标 API 端到端验收仍未勾。
