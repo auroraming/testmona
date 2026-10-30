@@ -417,6 +417,49 @@ def register_ai_automation_routes(app) -> None:
             "lease_expires_at": lease_expires_at,
         }
 
+    @app.post("/internal/ai-automation/tasks/{task_id}/completion")
+    async def complete_ai_automation_task(
+        payload: schemas.AIAutomationCompletionRequest,
+        task_id: int = Path(..., ge=1),
+        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+        db: Session = Depends(get_db),
+    ):
+        """Lease-scoped model call. A completion never marks the task passed."""
+        from ..services import ai_manager
+
+        runner = _authenticate_runner(db, x_runner_token)
+        task = _get_task(db, task_id)
+        _verify_lease(task, runner, payload.lease_token)
+        if task.status != "running":
+            raise HTTPException(status_code=409, detail="AI completion is only available while the task is running")
+        used = (task.input_tokens or 0) + (task.output_tokens or 0)
+        if task.token_budget is not None and used >= task.token_budget:
+            raise HTTPException(status_code=409, detail="Task token budget is exhausted")
+        max_tokens = payload.max_tokens
+        if task.token_budget is not None:
+            max_tokens = max(1, min(max_tokens, task.token_budget - used))
+        result = await ai_manager.generate_ai_completion(
+            db,
+            ai_manager.AICompletionRequest(
+                prompt=payload.prompt,
+                max_tokens=max_tokens,
+                temperature=0,
+                timeout_seconds=30,
+            ),
+            operation="automation_agent",
+            project_id=task.project_id,
+            user_id=task.requested_by,
+        )
+        task.input_tokens = (task.input_tokens or 0) + result.prompt_tokens
+        task.output_tokens = (task.output_tokens or 0) + result.completion_tokens
+        db.commit()
+        db.refresh(task)
+        return {
+            "content": result.content,
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+        }
+
     @app.post("/internal/ai-automation/tasks/{task_id}/report", response_model=schemas.AIAutomationTask)
     def report_ai_automation_task(
         payload: schemas.AIAutomationTaskReport,

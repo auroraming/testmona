@@ -25,3 +25,19 @@ clicks alone never count as a passed test.
 Screenshots and the Playwright Trace are uploaded through the lease-protected
 artifact endpoint and attached to immutable evidence. Temporary local files are
 removed after upload.
+
+## AI exploration
+
+Create a Web task with `execution_mode: "ai"` and an environment whose
+`app_url` or `base_url` is an origin, for example `https://example.test`.
+The worker starts pinned `@playwright/mcp@0.0.83` with an isolated headless
+browser, then stops that process when the task finishes, fails, or is
+cancelled. Text, visibility, URL, and network assertions are local tools.
+A click, navigation, or snapshot cannot pass the task by itself.
+
+The MCP allowed-origins flag is not treated as a security boundary: the
+worker rejects navigation outside the environment origin before the browser
+sees it. `@playwright/mcp@latest` and origins that include a path are
+rejected. Real-browser end-to-end acceptance, batch regression, and CI
+templates are still open. The package pin is independent of the fixed-script
+Playwright `1.64.1` image.

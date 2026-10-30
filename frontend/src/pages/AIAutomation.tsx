@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
 import { aiAutomationAPI, getApiErrorMessage, type AIAutomationEvidence, type AIAutomationExecutionMode, type AIAutomationRunner, type AIAutomationRunnerType, type AIAutomationTask } from '@/lib/api';
+import { runnerSupportsExecutionMode } from '@/lib/aiAutomationRunners';
 
 const activeStatuses = new Set(['queued', 'running', 'cancel_requested']);
 
@@ -87,10 +88,7 @@ export function AIAutomation() {
     catch (error) { toast({ title: t('aiAutomationCancelFailed'), description: getApiErrorMessage(error, t('aiAutomationCancelFailed')), variant: 'destructive' }); }
   };
 
-  const supportsMode = (runner: AIAutomationRunner) => {
-    const modes = runner.capabilities.execution_modes;
-    return Array.isArray(modes) ? modes.includes(executionMode) : executionMode === 'script';
-  };
+  const supportsMode = (runner: AIAutomationRunner) => runnerSupportsExecutionMode(runner, executionMode);
   const compatibleRunners = runners.filter((runner) => runner.runner_type === runnerType && runner.status !== 'disabled' && supportsMode(runner));
   const availableRunners = compatibleRunners.filter((runner) => runner.status === 'online' || runner.status === 'busy');
 

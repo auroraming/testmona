@@ -455,3 +455,87 @@ def test_user_and_runner_actions_are_audited_with_actor_metadata(client):
         assert task_rows[0].additional_metadata["actor_type"] == "user"
         assert task_rows[1].additional_metadata["actor_type"] == "runner"
         assert task_rows[1].additional_metadata["runner_id"] == runner["id"]
+
+
+def test_runner_completion_records_tokens_without_passing(client, monkeypatch):
+    from app.services.ai_manager import AICompletionResult
+
+    calls = []
+
+    async def fake_complete(db, request, operation="completion", project_id=None, user_id=None, **_kwargs):
+        calls.append({
+            "prompt": request.prompt,
+            "operation": operation,
+            "project_id": project_id,
+            "user_id": user_id,
+            "max_tokens": request.max_tokens,
+        })
+        return AICompletionResult(
+            provider="fake", model="fake", content='{"type":"tool","tool":"browser_snapshot","arguments":{}}',
+            prompt_tokens=3, completion_tokens=4, total_tokens=7,
+        )
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fake_complete)
+    _runner, token = _register_runner(client, "web")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "execution_mode": "ai",
+        "goal": "Check the title",
+        "token_budget": 100,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide the next browser action", "max_tokens": 800},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["prompt_tokens"] == 3
+    assert calls[0]["operation"] == "automation_agent"
+    assert calls[0]["project_id"] == client.project_id
+    stored = client.get(f"/ai-automation/tasks/{task['id']}").json()
+    assert stored["status"] == "running"
+    assert stored["input_tokens"] == 3
+    assert stored["output_tokens"] == 4
+
+    cancelled = client.post(f"/ai-automation/tasks/{task['id']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    rejected = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide again", "max_tokens": 100},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "AI completion is only available while the task is running"
+
+
+def test_runner_completion_stops_at_token_budget(client, monkeypatch):
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("model should not be called after the budget is spent")
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fail_if_called)
+    _runner, token = _register_runner(client, "api")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "api",
+        "goal": "Budget",
+        "token_budget": 4,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    from app import models
+
+    with client.SessionLocal() as db:
+        row = db.query(models.AIAutomationTask).filter(models.AIAutomationTask.id == task["id"]).one()
+        row.input_tokens = 4
+        db.commit()
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide", "max_tokens": 50},
+    )
+    assert response.status_code == 409
+    assert "token budget" in response.json()["detail"]
+    assert client.get(f"/ai-automation/tasks/{task['id']}").json()["status"] == "running"

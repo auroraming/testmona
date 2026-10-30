@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .automation_agent_runtime import AgentRuntimeResult, AgentStep
+from .automation_mcp_client import strip_inline_secrets
 
 
 class RunnerProtocolError(Exception):
@@ -101,6 +102,8 @@ class AutomationRunnerProtocol:
             "completed": "passed",
             "cancelled": "cancelled",
             "failed": "failed",
+            "blocked": "blocked",
+            "timed_out": "timed_out",
         }.get(result.status, "failed")
         payload = {
             "lease_token": lease.lease_token,
@@ -121,16 +124,41 @@ class AutomationRunnerProtocol:
     def evidence_sink(self, lease: RunnerLease):
         """Return an Agent Runtime callback that persists one immutable step."""
         async def persist(step: AgentStep) -> None:
+            output = step.output if isinstance(step.output, dict) else {}
+            structured = output.get("structured_content") if isinstance(output, dict) else None
+            text_parts: list[str] = []
+            content = output.get("content") if isinstance(output, dict) else None
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                        text_parts.append(item["text"][:2000])
+            failed = bool(step.error) or (isinstance(structured, dict) and structured.get("passed") is False)
             await self.append_evidence(lease, [{
                 "sequence": step.sequence,
-                "evidence_type": "step",
+                "evidence_type": _evidence_type_for_tool(step.tool),
                 "title": step.tool,
-                "status": "failed" if step.error else "completed",
-                "payload": {
+                "status": "failed" if failed else "completed",
+                "payload": strip_inline_secrets({
                     "arguments": step.arguments,
-                    "output": step.output,
+                    "output": {
+                        "structured_content": structured,
+                        "text": "\n".join(text_parts)[:4000],
+                    },
                     "error": step.error,
-                },
+                }),
             }])
 
         return persist
+
+
+def _evidence_type_for_tool(tool: str) -> str:
+    name = tool.lower()
+    if "assert" in name:
+        return "assertion"
+    if "network" in name:
+        return "network"
+    if "screenshot" in name:
+        return "screenshot"
+    if "trace" in name:
+        return "trace"
+    return "step"

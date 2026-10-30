@@ -970,6 +970,12 @@ class AIAutomationRunnerHeartbeatResult(BaseModel):
     lease_expires_at: Optional[datetime] = None
 
 
+class AIAutomationCompletionRequest(BaseModel):
+    lease_token: str = Field(..., min_length=20, max_length=200)
+    prompt: str = Field(..., min_length=1, max_length=12000)
+    max_tokens: int = Field(800, ge=1, le=800)
+
+
 class AIAutomationTaskReport(BaseModel):
     lease_token: str = Field(..., min_length=20, max_length=200)
     status: str = Field(..., min_length=1, max_length=30)

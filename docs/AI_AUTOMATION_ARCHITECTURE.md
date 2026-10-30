@@ -1,6 +1,6 @@
 # AI automation architecture baseline
 
-Status: orchestration and evidence baseline implemented; no production Runner is enabled yet.
+Status: orchestration, evidence, and the Web AI assertion lifecycle are implemented. Real-browser acceptance is still open, and no Runner is enabled by default.
 
 ## Reuse decisions
 
@@ -97,8 +97,21 @@ The Agent Runtime now has a hardened Playwright MCP stdio transport boundary:
 the package reference must be an exact version, the browser is headless and
 isolated, the target origin is explicit, service workers are blocked, and the
 allowlist excludes arbitrary JavaScript execution, unrestricted code, and file
-upload tools. The assertion proxy and Worker lifecycle still need to be
-connected before AI Web tasks are enabled.
+upload tools.
+
+Web AI tasks connect that transport to an assertion proxy and a per-task
+process lifecycle. The proxy adds `browser_assert_text`,
+`browser_assert_visible`, `browser_assert_url`, and `browser_assert_network`.
+Those tools read a snapshot, tab list, or captured request list and return
+`passed: true` only when the observation matches. Navigation outside the
+environment origin is rejected before it reaches the browser, because the MCP
+`--allowed-origins` flag is not a security boundary. Request-detail and image
+payloads are hidden, and file-writing arguments are dropped. The Web Runner
+starts `@playwright/mcp@0.0.83` for one task and disconnects it before the
+terminal report. Model calls from that container use the lease-scoped
+completion endpoint; a completion never marks the task passed. Batch
+regression, CI templates, and a real-browser end-to-end run are still open.
+The MCP package pin is independent of the fixed-script Playwright 1.64.1 image.
 
 ## API Runner baseline
 
