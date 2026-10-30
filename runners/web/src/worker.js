@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { readFile, unlink } from 'node:fs/promises';
+import { executeWebAi } from './aiExecutor.js';
 import { executeScript } from './executor.js';
 import { RunnerProtocol, delay } from '../../common/protocol.js';
 
@@ -12,7 +13,7 @@ const protocol = new RunnerProtocol(backendUrl, runnerToken);
 async function runLease(lease) {
   const task = lease.task;
   if (task.execution_mode !== 'script') {
-    await protocol.report(lease, 'blocked', null, 'Web AI mode requires the Playwright MCP integration');
+    await executeWebAi(lease, { protocol });
     return;
   }
   const browser = await chromium.launch({ headless: true });

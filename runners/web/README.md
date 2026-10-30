@@ -25,3 +25,25 @@ clicks alone never count as a passed test.
 Screenshots and the Playwright Trace are uploaded through the lease-protected
 artifact endpoint and attached to immutable evidence. Temporary local files are
 removed after upload.
+
+## AI exploration
+
+Create a Web task with `execution_mode: "ai"` and an environment whose
+`app_url` or `base_url` is an origin, for example `https://example.test`.
+The worker starts the installed `@playwright/mcp@0.0.83` CLI. npm overrides
+force `playwright` and `playwright-core` to `1.64.1`, which is Chromium
+revision 1248, the same browser shipped in
+`mcr.microsoft.com/playwright:v1.64.1-noble`. The process is not launched
+with `npx` or `--browser=chrome`, because those would select a different
+browser than the image. It runs headless and isolated, writes automatic
+screenshots outside the workspace, and stops when the task finishes, fails,
+or is cancelled.
+
+Text assertions match a whole phrase, so a single letter inside another word
+does not pass. The MCP allowed-origins flag is not treated as a security
+boundary: direct external navigation is rejected before the browser sees it,
+and a same-origin URL that redirects, or a click that leaves the origin, is
+rejected after the resulting page URL is checked. `@playwright/mcp@latest`
+and origins that include a path are rejected when the task or environment is
+saved. Real-browser end-to-end acceptance, batch regression, and CI templates
+are still open.

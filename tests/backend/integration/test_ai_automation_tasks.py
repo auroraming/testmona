@@ -455,3 +455,227 @@ def test_user_and_runner_actions_are_audited_with_actor_metadata(client):
         assert task_rows[0].additional_metadata["actor_type"] == "user"
         assert task_rows[1].additional_metadata["actor_type"] == "runner"
         assert task_rows[1].additional_metadata["runner_id"] == runner["id"]
+
+
+def test_runner_completion_records_tokens_without_passing(client, monkeypatch):
+    from app.services.ai_manager import AICompletionResult
+
+    calls = []
+
+    async def fake_complete(db, request, operation="completion", project_id=None, user_id=None, **_kwargs):
+        calls.append({
+            "prompt": request.prompt,
+            "operation": operation,
+            "project_id": project_id,
+            "user_id": user_id,
+            "max_tokens": request.max_tokens,
+        })
+        return AICompletionResult(
+            provider="fake", model="fake", content='{"type":"tool","tool":"browser_snapshot","arguments":{}}',
+            prompt_tokens=3, completion_tokens=4, total_tokens=7,
+        )
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fake_complete)
+    _runner, token = _register_runner(client, "web")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "execution_mode": "ai",
+        "goal": "Check the title",
+        "token_budget": 100,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide the next browser action", "max_tokens": 800},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["prompt_tokens"] == 3
+    assert calls[0]["operation"] == "automation_agent"
+    assert calls[0]["project_id"] == client.project_id
+    stored = client.get(f"/ai-automation/tasks/{task['id']}").json()
+    assert stored["status"] == "running"
+    assert stored["input_tokens"] == 3
+    assert stored["output_tokens"] == 4
+
+    cancelled = client.post(f"/ai-automation/tasks/{task['id']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    rejected = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide again", "max_tokens": 100},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "AI completion is only available while the task is running"
+
+
+def test_runner_completion_stops_at_token_budget(client, monkeypatch):
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("model should not be called after the budget is spent")
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fail_if_called)
+    _runner, token = _register_runner(client, "api")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "api",
+        "goal": "Budget",
+        "token_budget": 4,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    from app import models
+
+    with client.SessionLocal() as db:
+        row = db.query(models.AIAutomationTask).filter(models.AIAutomationTask.id == task["id"]).one()
+        row.input_tokens = 4
+        db.commit()
+    response = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide", "max_tokens": 50},
+    )
+    assert response.status_code == 409
+    assert "token budget" in response.json()["detail"]
+    assert client.get(f"/ai-automation/tasks/{task['id']}").json()["status"] == "running"
+
+
+def test_expired_lease_cannot_complete_renew_or_pass(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import models
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("expired lease must not call the model")
+
+    monkeypatch.setattr("app.services.ai_manager.generate_ai_completion", fail_if_called)
+    _runner, token = _register_runner(client, "mobile")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "mobile",
+        "goal": "Expired lease",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    with client.SessionLocal() as db:
+        row = db.query(models.AIAutomationTask).filter(models.AIAutomationTask.id == task["id"]).one()
+        row.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        db.commit()
+
+    completion = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/completion",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "prompt": "Decide", "max_tokens": 50},
+    )
+    heartbeat = client.post("/internal/ai-automation/heartbeat", headers=headers, json={
+        "task_id": task["id"], "lease_token": lease["lease_token"],
+    })
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "passed", "result": {"summary": "no"}},
+    )
+    assert completion.status_code == 409
+    assert heartbeat.status_code == 409
+    assert report.status_code == 409
+    assert "expired" in completion.json()["detail"]
+    stored = client.get(f"/ai-automation/tasks/{task['id']}").json()
+    assert stored["status"] == "running"
+    assert stored["input_tokens"] == 0
+
+
+def test_invalid_target_origin_is_rejected_when_saved(client):
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "goal": "Bad origin",
+        "config": {"app_url": "https://example.test/app"},
+    })
+    assert task.status_code == 422
+    assert "origin" in task.text
+    environment = client.post("/execution-environments/", json={
+        "name": "Unsafe",
+        "environment_type": "staging",
+        "project_id": client.project_id,
+        "config_data": {"base_url": "https://user:pass@example.test"},
+    })
+    assert environment.status_code == 422
+    saved = client.post("/execution-environments/", json={
+        "name": "Safe",
+        "environment_type": "staging",
+        "project_id": client.project_id,
+        "config_data": {"app_url": "https://example.test:443"},
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["config_data"]["app_url"] == "https://example.test:443"
+
+
+def test_ai_report_writes_result_execution_and_run(client):
+    from app import models
+
+    with client.SessionLocal() as db:
+        suite = models.TestSuite(name="Web", project_id=client.project_id)
+        db.add(suite)
+        db.flush()
+        case = models.TestCase(
+            title="Welcome", test_suite_id=suite.id, project_id=client.project_id, priority="medium",
+        )
+        db.add(case)
+        db.flush()
+        run = models.TestRun(name="Round 1", project_id=client.project_id, status="pending")
+        db.add(run)
+        db.flush()
+        execution = models.TestExecution(
+            test_case_id=case.id, test_run_id=run.id, executor_id=1, status=models.TestStatus.PENDING,
+        )
+        db.add(execution)
+        db.commit()
+        case_id, run_id = case.id, run.id
+
+    _runner, token = _register_runner(client, "web")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id,
+        "runner_type": "web",
+        "execution_mode": "ai",
+        "goal": "Welcome is visible",
+        "test_case_id": case_id,
+        "test_run_id": run_id,
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    evidence = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [{
+            "sequence": 1, "evidence_type": "screenshot", "title": "browser_take_screenshot",
+            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/page.png",
+        }, {
+            "sequence": 2, "evidence_type": "assertion", "title": "browser_assert_text",
+            "status": "passed", "payload": {"output": {"structured_content": {"passed": True}}},
+        }, {
+            "sequence": 3, "evidence_type": "trace", "title": "Playwright trace",
+            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/trace.zip",
+        }, {
+            "sequence": 4, "evidence_type": "log", "title": "Browser console",
+            "status": "completed", "payload": {"text": "console ready"},
+            "artifact_ref": "ai-automation/1/console.txt",
+        }]},
+    )
+    assert evidence.status_code == 200, evidence.text
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "passed", "result": {"summary": "Title is visible"}},
+    )
+    assert report.status_code == 200, report.text
+    results = client.get("/test-results", params={"test_run_id": run_id})
+    assert results.status_code == 200, results.text
+    assert results.json()[0]["status"] == "pass"
+    assert results.json()[0]["execution_time"] >= 0
+    with client.SessionLocal() as db:
+        stored_run = db.query(models.TestRun).filter(models.TestRun.id == run_id).one()
+        stored_execution = db.query(models.TestExecution).filter(models.TestExecution.test_run_id == run_id).one()
+        assert stored_run.status == "completed"
+        assert stored_execution.status == models.TestStatus.PASSED
+        assert "ai-automation/1/page.png" in stored_execution.screenshots
+        assert "Browser console" in stored_execution.logs

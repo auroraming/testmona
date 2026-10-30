@@ -123,7 +123,7 @@ export const zhCN: typeof en = {
   "aiAutomationCancelFailed": "取消自动化任务失败。",
   "aiAutomationNoEvidence": "Runner 尚未上报证据。",
   "aiAutomationRunnerAvailability": "Runner 可用性",
-  "aiAutomationRunnerAvailable": "{{count}} 个兼容 Runner 可用",
+  "aiAutomationRunnerAvailable": "{count} 个兼容 Runner 可用",
   "aiAutomationRunnerUnavailable": "没有兼容 Runner 在线",
   "aiAutomationQueueWithoutRunner": "仍可将任务加入队列；兼容 Runner 上线后会自动领取。",
   "mindmapImported": "已将 XMind 文件导入为新脑图。",

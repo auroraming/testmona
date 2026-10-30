@@ -1,6 +1,6 @@
 # AI automation architecture baseline
 
-Status: orchestration and evidence baseline implemented; no production Runner is enabled yet.
+Status: orchestration, evidence, and the Web AI assertion lifecycle are implemented. Real-browser acceptance is still open, and no Runner is enabled by default.
 
 ## Reuse decisions
 
@@ -97,8 +97,29 @@ The Agent Runtime now has a hardened Playwright MCP stdio transport boundary:
 the package reference must be an exact version, the browser is headless and
 isolated, the target origin is explicit, service workers are blocked, and the
 allowlist excludes arbitrary JavaScript execution, unrestricted code, and file
-upload tools. The assertion proxy and Worker lifecycle still need to be
-connected before AI Web tasks are enabled.
+upload tools.
+
+Web AI tasks connect that transport to an assertion proxy and a per-task
+process lifecycle. The proxy adds `browser_assert_text`,
+`browser_assert_visible`, `browser_assert_url`, and `browser_assert_network`.
+Text assertions match a whole phrase. Those tools read a snapshot, tab list,
+or captured request list and return `passed: true` only when the observation
+matches. Direct navigation outside the environment origin is rejected before
+it reaches the browser. After navigation or a click, the proxy also checks the
+resulting page URL, because the MCP `--allowed-origins` flag does not stop
+redirects. Request-detail and image payloads are hidden. Automatic MCP files
+go to a temporary output directory that is removed with the process, not the
+workspace. The container runs the local `@playwright/mcp@0.0.83` CLI on
+playwright-core 1.64.1 so it uses Chromium revision 1248 from the Playwright
+image; it does not use `npx` or `--browser=chrome`. The stdio client speaks
+newline-delimited JSON, which is the framing that package reads. Before the
+MCP process stops, the Web Runner uploads screenshot, Trace, and console-log
+files and stores their artifact references on the evidence rows. A terminal
+report also writes the linked test result, execution record, and test-run
+status. Model calls use the lease-scoped completion endpoint. An expired lease cannot complete,
+renew, or report a pass. Batch regression, CI templates, and a real-browser
+end-to-end run are still open. The Node Web Runner is the production
+executor; the Python helper follows the same origin and assertion rules.
 
 ## API Runner baseline
 

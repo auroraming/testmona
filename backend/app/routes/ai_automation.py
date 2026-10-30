@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path as FilePath
@@ -79,11 +80,112 @@ def _authenticate_runner(db: Session, token: str | None) -> models.AIAutomationR
     return runner
 
 
+_TASK_RESULT_STATUS = {
+    "passed": "pass",
+    "failed": "fail",
+    "blocked": "block",
+    "cancelled": "skip",
+    "timed_out": "fail",
+}
+_TASK_EXECUTION_STATUS = {
+    "passed": models.TestStatus.PASSED,
+    "failed": models.TestStatus.FAILED,
+    "blocked": models.TestStatus.BLOCKED,
+    "cancelled": models.TestStatus.SKIPPED,
+    "timed_out": models.TestStatus.FAILED,
+}
+_TERMINAL_RESULT_STATUSES = {"pass", "fail", "skip", "block"}
+
+
+def _sync_linked_execution(db: Session, task: models.AIAutomationTask) -> None:
+    """Write the terminal automation outcome onto the linked run, result, and execution."""
+    if task.test_run_id is None:
+        return
+    result_status = _TASK_RESULT_STATUS.get(task.status)
+    execution_status = _TASK_EXECUTION_STATUS.get(task.status)
+    if result_status is None or execution_status is None:
+        return
+    now = datetime.now(timezone.utc)
+    started = _as_utc(task.started_at or task.created_at or now)
+    duration = max(0.0, (now - started).total_seconds())
+    summary = task.error_message
+    if isinstance(task.result, dict) and task.result.get("summary"):
+        summary = str(task.result["summary"])
+    evidence = db.query(models.AIAutomationEvidence).filter(
+        models.AIAutomationEvidence.task_id == task.id
+    ).order_by(models.AIAutomationEvidence.sequence).all()
+    screenshots = [item.artifact_ref for item in evidence if item.evidence_type == "screenshot" and item.artifact_ref]
+    logs = "\n".join(
+        f"#{item.sequence} {item.evidence_type} {item.title} {item.status or ''}".strip()
+        for item in evidence
+    )[:20000]
+
+    if task.test_case_id is not None:
+        result = db.query(models.TestResult).filter(
+            models.TestResult.test_run_id == task.test_run_id,
+            models.TestResult.test_case_id == task.test_case_id,
+        ).order_by(models.TestResult.id.desc()).first()
+        if result is None:
+            result = models.TestResult(
+                test_case_id=task.test_case_id,
+                test_run_id=task.test_run_id,
+                executed_by=task.requested_by,
+                status=result_status,
+            )
+            db.add(result)
+        result.status = result_status
+        result.actual_result = (summary or "")[:4000] or None
+        result.execution_time = duration
+        result.execution_started_at = result.execution_started_at or started
+        result.executed_at = now
+        result.executed_by = result.executed_by or task.requested_by
+        result.execution_state = "completed"
+        db.flush()
+
+        execution = db.query(models.TestExecution).filter(
+            models.TestExecution.test_run_id == task.test_run_id,
+            models.TestExecution.test_case_id == task.test_case_id,
+        ).order_by(models.TestExecution.id.desc()).first()
+        if execution is None:
+            execution = models.TestExecution(
+                test_case_id=task.test_case_id,
+                test_run_id=task.test_run_id,
+                executor_id=task.requested_by,
+                started_at=started,
+            )
+            db.add(execution)
+        execution.status = execution_status
+        execution.completed_at = now
+        execution.screenshots = json.dumps(screenshots)
+        execution.logs = logs
+
+    run = db.query(models.TestRun).filter(models.TestRun.id == task.test_run_id).first()
+    if run is None:
+        return
+    if run.started_at is None:
+        run.started_at = started
+    db.flush()
+    results = db.query(models.TestResult).filter(models.TestResult.test_run_id == run.id).all()
+    if results and all(models.canonical_result_status(item.status) in _TERMINAL_RESULT_STATUSES for item in results):
+        run.status = "completed"
+        run.completed_at = now
+    else:
+        run.status = "in_progress"
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _verify_lease(task: models.AIAutomationTask, runner: models.AIAutomationRunner, lease_token: str) -> None:
     if task.runner_id != runner.id or not task.lease_token_hash:
         raise HTTPException(status_code=409, detail="Task is not leased to this runner")
     if not secrets.compare_digest(task.lease_token_hash, _token_hash(lease_token)):
         raise HTTPException(status_code=401, detail="Invalid task lease")
+    if task.lease_expires_at is None or _as_utc(task.lease_expires_at) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=409, detail="Task lease has expired")
 
 
 def _validate_project_links(db: Session, payload: schemas.AIAutomationTaskCreate) -> None:
@@ -417,6 +519,49 @@ def register_ai_automation_routes(app) -> None:
             "lease_expires_at": lease_expires_at,
         }
 
+    @app.post("/internal/ai-automation/tasks/{task_id}/completion")
+    async def complete_ai_automation_task(
+        payload: schemas.AIAutomationCompletionRequest,
+        task_id: int = Path(..., ge=1),
+        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+        db: Session = Depends(get_db),
+    ):
+        """Lease-scoped model call. A completion never marks the task passed."""
+        from ..services import ai_manager
+
+        runner = _authenticate_runner(db, x_runner_token)
+        task = _get_task(db, task_id)
+        _verify_lease(task, runner, payload.lease_token)
+        if task.status != "running":
+            raise HTTPException(status_code=409, detail="AI completion is only available while the task is running")
+        used = (task.input_tokens or 0) + (task.output_tokens or 0)
+        if task.token_budget is not None and used >= task.token_budget:
+            raise HTTPException(status_code=409, detail="Task token budget is exhausted")
+        max_tokens = payload.max_tokens
+        if task.token_budget is not None:
+            max_tokens = max(1, min(max_tokens, task.token_budget - used))
+        result = await ai_manager.generate_ai_completion(
+            db,
+            ai_manager.AICompletionRequest(
+                prompt=payload.prompt,
+                max_tokens=max_tokens,
+                temperature=0,
+                timeout_seconds=30,
+            ),
+            operation="automation_agent",
+            project_id=task.project_id,
+            user_id=task.requested_by,
+        )
+        task.input_tokens = (task.input_tokens or 0) + result.prompt_tokens
+        task.output_tokens = (task.output_tokens or 0) + result.completion_tokens
+        db.commit()
+        db.refresh(task)
+        return {
+            "content": result.content,
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+        }
+
     @app.post("/internal/ai-automation/tasks/{task_id}/report", response_model=schemas.AIAutomationTask)
     def report_ai_automation_task(
         payload: schemas.AIAutomationTaskReport,
@@ -439,6 +584,7 @@ def register_ai_automation_routes(app) -> None:
         task.input_tokens = payload.input_tokens
         task.output_tokens = payload.output_tokens
         task.completed_at = datetime.now(timezone.utc)
+        _sync_linked_execution(db, task)
         db.commit()
         db.refresh(task)
         _audit_task_action(

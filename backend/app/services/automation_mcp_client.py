@@ -9,11 +9,14 @@ raw client exception or gains access to an unapproved tool.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from fastmcp import Client
 from jsonschema import SchemaError, ValidationError, validate
+
+_INLINE_SECRET_KEYS = {"apikey", "authorization", "password", "secret", "token", "accesstoken"}
 
 
 class AutomationMCPError(Exception):
@@ -27,6 +30,25 @@ class AutomationMCPError(Exception):
 
     def as_dict(self) -> dict[str, Any]:
         return {"code": self.code, "message": self.message, "retryable": self.retryable}
+
+
+def is_inline_secret_key(key: Any) -> bool:
+    """Match the evidence schema's inline-secret key rule."""
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return normalized in _INLINE_SECRET_KEYS or normalized.endswith(tuple(_INLINE_SECRET_KEYS))
+
+
+def strip_inline_secrets(value: Any) -> Any:
+    """Drop credential-shaped keys before a payload is stored or shown to a model."""
+    if isinstance(value, dict):
+        return {
+            key: strip_inline_secrets(child)
+            for key, child in value.items()
+            if not is_inline_secret_key(key)
+        }
+    if isinstance(value, list):
+        return [strip_inline_secrets(child) for child in value]
+    return value
 
 
 @dataclass(frozen=True)
