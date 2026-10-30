@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { TestCase } from '@/types';
 import type { Section } from '@/types/testCases';
+import { TestCaseImages } from './TestCaseImages';
 
 type SelectedNode = {
   kind: 'suite' | 'section' | 'case' | 'field' | 'step';
@@ -50,6 +51,8 @@ type Props = {
   suiteName: string;
   sections: Section[];
   testCases: TestCase[];
+  imageCounts: Record<number, number>;
+  onImageCountChange: (testCaseId: number, count: number) => void;
   canWrite: boolean;
   labels: {
     addModule: string;
@@ -143,6 +146,8 @@ export function TestCaseMindmapView({
   suiteName,
   sections,
   testCases,
+  imageCounts,
+  onImageCountChange,
   canWrite,
   labels,
   priorityOptions,
@@ -427,6 +432,7 @@ export function TestCaseMindmapView({
       tags: [
         testCase.project_seq ? `TC-${testCase.project_seq}` : `#${testCase.id}`,
         testCase.priority,
+        ...(imageCounts[testCase.id] ? [`🖼 ${imageCounts[testCase.id]}`] : []),
       ],
       metadata: {
         kind: 'case',
@@ -479,11 +485,11 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
+  }, [imageCounts, labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
 
   const dataSignature = useMemo(
-    () => JSON.stringify([suiteId, sections, stepsByCase, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
-    [sections, stepsByCase, suiteId, visibleTestCases],
+    () => JSON.stringify([suiteId, sections, stepsByCase, imageCounts, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
+    [imageCounts, sections, stepsByCase, suiteId, visibleTestCases],
   );
 
   useEffect(() => {
@@ -981,6 +987,7 @@ export function TestCaseMindmapView({
             {(selected.kind === 'case' || selected.kind === 'field' || selected.kind === 'step') && selectedCase && <Button className="w-full" onClick={() => onOpenCase(selectedCase.id)}><FileText className="mr-2 h-4 w-4" />{labels.edit}</Button>}
             {selectedCase && (
               <div className="space-y-3 border-t pt-4">
+                <TestCaseImages testCaseId={selectedCase.id} steps={stepsByCase[selectedCase.id] || []} canWrite={canWrite} onCountChange={(count) => onImageCountChange(selectedCase.id, count)} />
                 <div className="space-y-1.5">
                   <Label>{labels.priority}</Label>
                   <Select value={caseDraft.priority} onValueChange={(priority) => updateCaseDraft({ ...caseDraft, priority: priority as TestCase['priority'] })} disabled={!canWrite}>

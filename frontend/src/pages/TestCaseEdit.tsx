@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ContentEditor } from '@/components/ui/content-editor';
 import { ReferenceField } from '@/components/ui/reference-field';
 import { TagChipInput } from '@/components/TestCases/TagChipInput';
+import { TestCaseImages } from '@/components/TestCases/TestCaseImages';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -1540,6 +1541,8 @@ export function TestCaseEdit() {
               </CardContent>
             </Card>
           )}
+
+          {resolvedTcId && <TestCaseImages testCaseId={resolvedTcId} steps={testSteps} canWrite={canWrite} />}
 
           <div>
             <div className="flex items-center justify-between">

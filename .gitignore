@@ -125,9 +125,10 @@ wheels/
 MANIFEST
 
 
-# Alembic (keep structure but ignore version files)
-alembic/versions/*.py
-!alembic/versions/__init__.py
+# Alembic migrations are release source and must be committed.
+
+# Runtime uploads are instance data, never source files.
+uploads/
 
 # Package manager files
 package-lock.json

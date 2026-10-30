@@ -112,6 +112,36 @@ export const testCasesAPI = {
     const response = await api.post(`/test-cases/${testCaseId}/steps${params}`, stepsWithTestCaseId);
     return response.data;
   },
+  getImages: async (testCaseId: number): Promise<TestCaseImage[]> => {
+    const response = await api.get(`/test-cases/${testCaseId}/images`);
+    return response.data;
+  },
+  getImageCounts: async (testSuiteId: number): Promise<Record<number, number>> => {
+    const response = await api.get(`/test-suites/${testSuiteId}/test-case-image-counts`);
+    return response.data;
+  },
+  getImageContent: async (contentUrl: string): Promise<Blob> => {
+    const response = await api.get(contentUrl, { responseType: 'blob' });
+    return response.data;
+  },
+  uploadImage: async (testCaseId: number, file: File, testStepId?: number, altText?: string): Promise<TestCaseImage> => {
+    const form = new FormData();
+    form.append('file', file);
+    if (testStepId) form.append('test_step_id', String(testStepId));
+    if (altText?.trim()) form.append('alt_text', altText.trim());
+    const response = await api.post(`/test-cases/${testCaseId}/images`, form);
+    return response.data;
+  },
+  replaceImage: async (testCaseId: number, imageId: number, file: File, altText?: string): Promise<TestCaseImage> => {
+    const form = new FormData();
+    form.append('file', file);
+    if (altText?.trim()) form.append('alt_text', altText.trim());
+    const response = await api.put(`/test-cases/${testCaseId}/images/${imageId}`, form);
+    return response.data;
+  },
+  deleteImage: async (testCaseId: number, imageId: number): Promise<void> => {
+    await api.delete(`/test-cases/${testCaseId}/images/${imageId}`);
+  },
   assist: async (
     testCaseId: number,
     payload: {
@@ -127,6 +157,21 @@ export const testCasesAPI = {
     return response.data;
   },
 };
+
+export interface TestCaseImage {
+  id: number;
+  test_case_id: number;
+  test_step_id: number | null;
+  filename: string;
+  mime_type: string;
+  file_size: number;
+  sha256: string;
+  alt_text: string | null;
+  uploaded_by: number;
+  created_at: string;
+  updated_at?: string | null;
+  content_url: string;
+}
 
 
 // Test Runs API

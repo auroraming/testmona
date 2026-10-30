@@ -180,6 +180,7 @@ export function TestCases() {
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'mindmap'>('list');
+  const [mindmapImageCounts, setMindmapImageCounts] = useState<Record<number, number>>({});
   const mindmapNavigationGuardRef = useRef<(action: () => void) => void>((action) => action());
   const [recycleBinOpen, setRecycleBinOpen] = useState(false);
   const [deletedTestCases, setDeletedTestCases] = useState<TestCase[]>([]);
@@ -2830,6 +2831,18 @@ export function TestCases() {
     [currentTestSuiteId, filteredAndSortedTestCases],
   );
 
+  useEffect(() => {
+    let active = true;
+    if (viewMode !== 'mindmap' || !currentTestSuiteId) {
+      setMindmapImageCounts({});
+      return () => { active = false; };
+    }
+    void testCasesAPI.getImageCounts(currentTestSuiteId)
+      .then((counts) => { if (active) setMindmapImageCounts(counts); })
+      .catch(() => { if (active) setMindmapImageCounts({}); });
+    return () => { active = false; };
+  }, [currentTestSuiteId, viewMode]);
+
   const currentSuiteName = testSuites.find((suite) => suite.id === currentTestSuiteId)?.name || t('testCasesTitle');
 
   const createMindmapSection = async (parentSectionId: number | null, name: string) => {
@@ -3018,7 +3031,7 @@ export function TestCases() {
     const steps = source.is_multistep
       ? await testCasesAPI.getSteps(source.id).catch(() => source.test_steps || [])
       : undefined;
-    await testCasesAPI.create({
+    const created = await testCasesAPI.create({
       title: `${source.title} (${t('copy')})`,
       description: source.description,
       reference: source.reference,
@@ -3034,6 +3047,25 @@ export function TestCases() {
       is_multistep: source.is_multistep,
       test_steps: steps,
     });
+    const sourceImages = await testCasesAPI.getImages(source.id);
+    if (!sourceImages.length) return;
+    const targetSteps = source.is_multistep ? await testCasesAPI.getSteps(created.id) : [];
+    const targetStepByNumber = new Map<number, number>(targetSteps.map(
+      (step: { id: number; step_number: number }) => [step.step_number, step.id] as [number, number],
+    ));
+    const sourceStepById = new Map<number, number>((steps || [])
+      .filter((step: { id?: number }) => step.id !== undefined)
+      .map((step: { id?: number; step_number: number }) => [step.id as number, step.step_number] as [number, number]));
+    for (const image of sourceImages) {
+      const blob = await testCasesAPI.getImageContent(image.content_url);
+      const sourceStepNumber = image.test_step_id ? sourceStepById.get(image.test_step_id) : undefined;
+      await testCasesAPI.uploadImage(
+        created.id,
+        new File([blob], image.filename, { type: image.mime_type }),
+        sourceStepNumber ? targetStepByNumber.get(sourceStepNumber) : undefined,
+        image.alt_text || undefined,
+      );
+    }
   };
 
   const copyMindmapNode = async (
@@ -4446,6 +4478,8 @@ export function TestCases() {
               suiteName={currentSuiteName}
               sections={mindmapSections}
               testCases={mindmapCases}
+              imageCounts={mindmapImageCounts}
+              onImageCountChange={(testCaseId, count) => setMindmapImageCounts((current) => ({ ...current, [testCaseId]: count }))}
               canWrite={canWrite}
               priorityOptions={priorityOptions}
               labels={{

@@ -71,6 +71,7 @@ export interface TestCase {
   updated_at?: string;
   is_multistep?: boolean;
   test_steps?: Array<{
+    id?: number;
     step_number: number;
     action: string;
     expected_result: string;

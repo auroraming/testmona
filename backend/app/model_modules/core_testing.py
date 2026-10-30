@@ -118,6 +118,7 @@ class TestCase(Base):
     shared_steps = relationship("SharedStep", secondary=shared_step_usage, back_populates="test_cases")
     tags = relationship("Tag", secondary="test_case_tags", back_populates="test_cases", lazy="selectin", order_by="Tag.name")
     test_steps = relationship("TestCaseStep", back_populates="test_case", cascade="all, delete-orphan")
+    images = relationship("TestCaseImage", back_populates="test_case", cascade="all, delete-orphan")
     dataset = relationship("TestDataset", foreign_keys=[dataset_id])
     creator = relationship("User", foreign_keys=[created_by])
     project = relationship("Project")
@@ -148,12 +149,33 @@ class TestCaseStep(Base):
 
     # Relationships
     test_case = relationship("TestCase", back_populates="test_steps")
+    images = relationship("TestCaseImage", back_populates="test_step", cascade="all, delete-orphan")
 
     # Unique constraint on test_case_id and step_number
     __table_args__ = (
         {'sqlite_autoincrement': True}
     )
 
+
+class TestCaseImage(Base):
+    __tablename__ = "test_case_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    test_case_id = Column(Integer, ForeignKey("test_cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    test_step_id = Column(Integer, ForeignKey("test_case_steps.id", ondelete="CASCADE"), nullable=True, index=True)
+    filename = Column(String(255), nullable=False)
+    storage_key = Column(String(80), nullable=False, unique=True)
+    mime_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    alt_text = Column(String(500), nullable=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    test_case = relationship("TestCase", back_populates="images")
+    test_step = relationship("TestCaseStep", back_populates="images")
+    uploader = relationship("User", foreign_keys=[uploaded_by])
 
 class TestCaseRevision(Base):
     __tablename__ = "test_case_revisions"
