@@ -89,8 +89,8 @@ AI 自动化交付阶段：
 
 首期验证清单：
 
-- [ ] 完成现有模块复用评估并形成架构决策记录。
-- [ ] 通用 MCP Client 完成探活、发现、调用、参数错误和超时验证。
+- [x] 完成现有模块复用评估并形成架构决策记录。
+- [x] 通用 MCP Client 完成探活、发现、调用、参数错误和超时验证。
 - [x] 预装 Chromium 的 Web Runner 在 Docker 环境启动并完成一次页面测试。
 - [ ] Playwright Test 固定脚本执行后，断言和证据正确回传 TestMona。
 - [ ] Android/iOS Worker 能注册设备，并验证无设备、设备占用和设备离线提示。
@@ -131,6 +131,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：加强统一证据链完整性。后端端到端测试改为通过有效任务租约真实上传 PNG 截图、ZIP Trace 和控制台文本，再写入证据并归档到关联的 TestResult、TestExecution 与 TestRun；证据接口同时拒绝不存在或不属于当前任务的制品引用，避免记录可下载性为假的截图/Trace。相关制品与归档测试通过。
 - 2026-10-30：完成 Mobile Runner 当前环境边界验收。独立 Node 22 Alpine 镜像构建成功并以 `node` 用户运行，Compose 固化只读根、`cap_drop: ALL`、`no-new-privileges` 和资源限制；无 Appium 端点与尚未接入 mobile-mcp 的 AI 模式返回稳定 blocked 原因并有回归测试。当前无 Android/iOS 设备，真机截图和步骤回传保持未勾。
 - 2026-10-30：完成 API Runner Docker/真实 HTTP 烟测。独立 Node 22 Alpine 镜像在 `node` 用户、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、0.5 CPU/256 MiB 限制下，对容器内临时 HTTP 服务完成请求、状态码、Header、JSON Path 和响应 Schema 共 4 个断言，产生 5 条证据并返回 `testmona.api_result.v1`。Compose 固化只读根。API MCP 对照与关联真实测试轮次仍未勾。
 - 2026-10-30：完成 Web Runner Docker/Chromium 实机烟测。锁定 Playwright 1.64.1 / Chromium 1248 的镜像成功构建；在 `pwuser`、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、1 CPU/1 GiB 限制下启动真实 Chromium，文本与可见性 2 个断言及截图证据通过。Compose 固化只读根与限额 tmpfs。完整登录态任务经后端入队、租约、制品回传的端到端仍待专用环境验收。

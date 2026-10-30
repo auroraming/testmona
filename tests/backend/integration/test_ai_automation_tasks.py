@@ -308,7 +308,6 @@ def test_runner_appends_ordered_idempotent_evidence(client):
                 "evidence_type": "screenshot",
                 "title": "Login form",
                 "payload": {"mime_type": "image/png"},
-                "artifact_ref": "ai-tasks/1/login.png",
             },
         ],
     }
@@ -425,6 +424,18 @@ def test_artifact_upload_rejects_unsupported_type_and_missing_lease(client, tmp_
         files={"file": ("x.html", b"<html>", "text/html")},
     )
     assert unsupported.status_code == 415
+    missing_file = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [{
+            "sequence": 1,
+            "evidence_type": "screenshot",
+            "title": "Missing screenshot",
+            "artifact_ref": f"ai-automation/{task['id']}/{'0' * 32}.png",
+        }]},
+    )
+    assert missing_file.status_code == 422
+    assert "does not exist" in missing_file.text
 
 
 def test_user_and_runner_actions_are_audited_with_actor_metadata(client):
@@ -610,8 +621,10 @@ def test_invalid_target_origin_is_rejected_when_saved(client):
     assert saved.json()["config_data"]["app_url"] == "https://example.test:443"
 
 
-def test_ai_report_writes_result_execution_and_run(client):
+def test_ai_report_writes_uploaded_evidence_result_execution_and_run(client, tmp_path, monkeypatch):
     from app import models
+
+    monkeypatch.setenv("AI_AUTOMATION_ARTIFACT_DIR", str(tmp_path))
 
     with client.SessionLocal() as db:
         suite = models.TestSuite(name="Web", project_id=client.project_id)
@@ -643,22 +656,35 @@ def test_ai_report_writes_result_execution_and_run(client):
     }).json()
     headers = {"X-Runner-Token": token}
     lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    uploaded = []
+    for name, content, content_type in (
+        ("page.png", b"\x89PNG\r\npage", "image/png"),
+        ("trace.zip", b"PK\x03\x04trace", "application/zip"),
+        ("console.txt", b"console ready", "text/plain"),
+    ):
+        response = client.post(
+            f"/internal/ai-automation/tasks/{task['id']}/artifacts",
+            headers={**headers, "X-Lease-Token": lease["lease_token"]},
+            files={"file": (name, content, content_type)},
+        )
+        assert response.status_code == 200, response.text
+        uploaded.append(response.json()["artifact_ref"])
     evidence = client.post(
         f"/internal/ai-automation/tasks/{task['id']}/evidence",
         headers=headers,
         json={"lease_token": lease["lease_token"], "items": [{
             "sequence": 1, "evidence_type": "screenshot", "title": "browser_take_screenshot",
-            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/page.png",
+            "status": "completed", "payload": {}, "artifact_ref": uploaded[0],
         }, {
             "sequence": 2, "evidence_type": "assertion", "title": "browser_assert_text",
             "status": "passed", "payload": {"output": {"structured_content": {"passed": True}}},
         }, {
             "sequence": 3, "evidence_type": "trace", "title": "Playwright trace",
-            "status": "completed", "payload": {}, "artifact_ref": "ai-automation/1/trace.zip",
+            "status": "completed", "payload": {}, "artifact_ref": uploaded[1],
         }, {
             "sequence": 4, "evidence_type": "log", "title": "Browser console",
             "status": "completed", "payload": {"text": "console ready"},
-            "artifact_ref": "ai-automation/1/console.txt",
+            "artifact_ref": uploaded[2],
         }]},
     )
     assert evidence.status_code == 200, evidence.text
@@ -677,5 +703,5 @@ def test_ai_report_writes_result_execution_and_run(client):
         stored_execution = db.query(models.TestExecution).filter(models.TestExecution.test_run_id == run_id).one()
         assert stored_run.status == "completed"
         assert stored_execution.status == models.TestStatus.PASSED
-        assert "ai-automation/1/page.png" in stored_execution.screenshots
+        assert uploaded[0] in stored_execution.screenshots
         assert "Browser console" in stored_execution.logs

@@ -764,6 +764,11 @@ def register_ai_automation_routes(app) -> None:
         }
         results = []
         for item in payload.items:
+            if item.artifact_ref:
+                prefix = f"ai-automation/{task.id}/"
+                artifact_name = item.artifact_ref.removeprefix(prefix)
+                if not item.artifact_ref.startswith(prefix) or not (_artifact_root() / str(task.id) / artifact_name).is_file():
+                    raise HTTPException(status_code=422, detail=f"Evidence artifact does not exist for task {task.id}")
             current = existing.get(item.sequence)
             item_data = item.model_dump()
             if current is not None:
