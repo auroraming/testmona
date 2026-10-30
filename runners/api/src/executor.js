@@ -1,17 +1,90 @@
 import { normalizeApiResult } from './result.js';
 
-const ACTIONS = new Set(['request', 'assert_status', 'assert_json_path', 'assert_header']);
+const ACTIONS = new Set(['request', 'assert_status', 'assert_json_path', 'assert_header', 'assert_json_schema']);
 const NON_RETRYABLE_STATUSES = new Set([401, 403]);
+const MAX_SCHEMA_ERRORS = 20;
+const MAX_SCHEMA_NODES = 500;
 
 function jsonPath(data, path) {
   const parts = String(path || '').replace(/^\$\.?/, '').split('.').filter(Boolean);
   return parts.reduce((value, part) => value == null ? undefined : value[part], data);
 }
 
+function matchesType(value, type) {
+  if (type === 'null') return value === null;
+  if (type === 'array') return Array.isArray(value);
+  if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  return typeof value === type;
+}
+
+function validateJsonSchema(value, schema, path = '$', errors = [], depth = 0) {
+  if (errors.length >= MAX_SCHEMA_ERRORS) return errors;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    errors.push(`${path}: invalid schema`);
+    return errors;
+  }
+  if (depth > 20) {
+    errors.push(`${path}: schema nesting exceeds 20 levels`);
+    return errors;
+  }
+  if (value === null && schema.nullable === true) return errors;
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => JSON.stringify(item) === JSON.stringify(value))) {
+    errors.push(`${path}: value is not in enum`);
+  }
+  const declaredTypes = Array.isArray(schema.type) ? schema.type : (schema.type ? [schema.type] : []);
+  if (declaredTypes.length && !declaredTypes.some((type) => matchesType(value, type))) {
+    errors.push(`${path}: expected ${declaredTypes.join('|')}`);
+    return errors;
+  }
+  for (const branch of schema.allOf || []) validateJsonSchema(value, branch, path, errors, depth + 1);
+  for (const key of ['anyOf', 'oneOf']) {
+    if (!Array.isArray(schema[key])) continue;
+    const matches = schema[key].filter((branch) => validateJsonSchema(value, branch, path, [], depth + 1).length === 0).length;
+    if ((key === 'anyOf' && matches === 0) || (key === 'oneOf' && matches !== 1)) errors.push(`${path}: ${key} did not match`);
+  }
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    for (const name of schema.required || []) {
+      if (!Object.prototype.hasOwnProperty.call(value, name)) errors.push(`${path}.${name}: required property is missing`);
+    }
+    const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+    for (const [name, childSchema] of Object.entries(properties)) {
+      if (Object.prototype.hasOwnProperty.call(value, name)) validateJsonSchema(value[name], childSchema, `${path}.${name}`, errors, depth + 1);
+    }
+    if (schema.additionalProperties === false) {
+      for (const name of Object.keys(value)) if (!(name in properties)) errors.push(`${path}.${name}: additional property is not allowed`);
+    }
+  }
+  if (Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => validateJsonSchema(item, schema.items, `${path}[${index}]`, errors, depth + 1));
+  }
+  return errors.slice(0, MAX_SCHEMA_ERRORS);
+}
+
 export function validateApiScript(script) {
   if (!Array.isArray(script) || script.length === 0) throw new Error('config.script must contain API steps');
   return script.map((step, index) => {
     if (!step || !ACTIONS.has(step.action)) throw new Error(`Unsupported API action at step ${index + 1}`);
+    if (step.action === 'assert_json_schema') {
+      if (!step.schema || typeof step.schema !== 'object' || Array.isArray(step.schema)) {
+        throw new Error(`assert_json_schema requires an object schema at step ${index + 1}`);
+      }
+      const pending = [{ value: step.schema, depth: 0 }];
+      let nodes = 0;
+      while (pending.length) {
+        const { value, depth } = pending.pop();
+        nodes += 1;
+        if (nodes > MAX_SCHEMA_NODES || depth > 20) throw new Error(`JSON schema exceeds validation limits at step ${index + 1}`);
+        for (const child of Object.values(value)) {
+          if (Array.isArray(child)) {
+            for (const item of child) if (item && typeof item === 'object' && !Array.isArray(item)) pending.push({ value: item, depth: depth + 1 });
+          } else if (child && typeof child === 'object') {
+            pending.push({ value: child, depth: depth + 1 });
+          }
+        }
+      }
+    }
     return step;
   });
 }
@@ -96,7 +169,14 @@ export async function executeApiScript({ baseUrl, script, variables = {}, creden
         if (step.action === 'assert_status') { expected = Number(step.expected); actual = response.status; }
         if (step.action === 'assert_json_path') { expected = step.expected; actual = jsonPath(responseBody, step.path); }
         if (step.action === 'assert_header') { expected = String(step.expected); actual = response.headers.get(step.name); }
-        const passed = JSON.stringify(actual) === JSON.stringify(expected);
+        if (step.action === 'assert_json_schema') {
+          expected = 'response matches JSON schema';
+          const errors = validateJsonSchema(responseBody, step.schema);
+          actual = errors.length ? errors : 'matched';
+        }
+        const passed = step.action === 'assert_json_schema'
+          ? actual === 'matched'
+          : JSON.stringify(actual) === JSON.stringify(expected);
         const assertion = { passed, expected, actual, path: step.path, name: step.name };
         assertions.push(assertion);
         payload = { ...payload, assertion: redactSecrets(assertion, credentials) };

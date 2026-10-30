@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executeApiScript } from '../src/executor.js';
+import { executeApiScript, validateApiScript } from '../src/executor.js';
 
 test('executes request and independent status/json assertions', async () => {
   const evidence = [];
@@ -76,4 +76,43 @@ test('substitutes variables and retries selected transient statuses', async () =
   });
   assert.equal(result.passed, true);
   assert.equal(calls, 2);
+});
+
+test('validates an OpenAPI-derived JSON response schema without storing the response body', async () => {
+  const evidence = [];
+  const schema = {
+    type: 'object',
+    required: ['id', 'items'],
+    properties: {
+      id: { type: 'integer' },
+      items: { type: 'array', items: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } },
+    },
+  };
+  const passed = await executeApiScript({
+    baseUrl: 'https://api.example.test/',
+    script: [{ action: 'request', path: '/catalog' }, { action: 'assert_json_schema', schema }],
+    fetchImpl: async () => new Response(JSON.stringify({ id: 7, items: [{ name: 'book' }] })),
+    emitEvidence: async (item) => evidence.push(item),
+  });
+  assert.equal(passed.passed, true);
+  assert.equal(evidence[1].payload.assertion.actual, 'matched');
+  assert.doesNotMatch(JSON.stringify(evidence), /book/);
+
+  const failed = await executeApiScript({
+    baseUrl: 'https://api.example.test/',
+    script: [{ action: 'request', path: '/catalog' }, { action: 'assert_json_schema', schema }],
+    fetchImpl: async () => new Response(JSON.stringify({ id: 'wrong', items: [{}] })),
+    emitEvidence: async () => {},
+  });
+  assert.equal(failed.passed, false);
+  assert.match(JSON.stringify(failed.assertions), /expected integer/);
+  assert.match(JSON.stringify(failed.assertions), /required property is missing/);
+});
+
+test('rejects oversized response schemas before making a request', () => {
+  const properties = Object.fromEntries(Array.from({ length: 501 }, (_, index) => [`field_${index}`, { type: 'string' }]));
+  assert.throws(
+    () => validateApiScript([{ action: 'assert_json_schema', schema: { type: 'object', properties } }]),
+    /exceeds validation limits/,
+  );
 });

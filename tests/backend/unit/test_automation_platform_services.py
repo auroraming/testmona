@@ -12,6 +12,7 @@ from app.services.automation_devices import acquire_lock, apply_offline_reclaim,
 from app.services.automation_openapi_scripts import materialize_api_scripts
 from app.services.automation_policy import enforce_task_policy
 from app.services.automation_results import API_RESULT_SCHEMA, archive_terminal_status, normalize_api_result
+from app.services.automation_script_drafts import fixed_script_from_evidence
 from app.services.mobile_mcp_discovery import discovery_contract, validate_mobile_mcp_package
 
 
@@ -104,6 +105,58 @@ def test_openapi_script_omits_secret_examples_and_keeps_status_assertion():
             "info": {"title": "Demo", "version": "1"},
             "paths": {"/a": {"get": {"responses": {"200": {"description": "ok"}}, "parameters": [{"$ref": "https://evil.example/schema"}]}}},
         }, None)
+
+
+def test_openapi_script_materializes_local_response_schema_for_the_api_runner():
+    generated = materialize_api_scripts({
+        "openapi": "3.0.3",
+        "info": {"title": "Catalog", "version": "1"},
+        "paths": {"/items": {"get": {"responses": {"200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ItemList"}}},
+        }}}}},
+        "components": {"schemas": {"ItemList": {
+            "type": "object",
+            "required": ["items"],
+            "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}},
+        }, "Item": {
+            "type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}},
+        }}},
+    })
+    schema_step = generated["scripts"][0]["script"][2]
+    assert schema_step["action"] == "assert_json_schema"
+    assert schema_step["schema"]["properties"]["items"]["items"]["required"] == ["id"]
+
+
+def test_swagger_response_schema_is_added_to_generated_script():
+    generated = materialize_api_scripts({
+        "swagger": "2.0",
+        "info": {"title": "Health", "version": "1"},
+        "paths": {"/health": {"get": {"responses": {"200": {
+            "description": "ok", "schema": {"type": "object", "required": ["healthy"],
+            "properties": {"healthy": {"type": "boolean"}}},
+        }}}}},
+    })
+    assert generated["scripts"][0]["script"][2] == {
+        "action": "assert_json_schema",
+        "schema": {"type": "object", "required": ["healthy"], "properties": {"healthy": {"type": "boolean"}}},
+    }
+
+
+def test_reviewed_api_script_keeps_header_and_schema_assertions():
+    schema = {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}}
+    steps, warnings = fixed_script_from_evidence(
+        execution_mode="script",
+        config={"script": [
+            {"action": "request", "method": "GET", "path": "/items"},
+            {"action": "assert_header", "name": "x-version", "expected": "1"},
+            {"action": "assert_json_schema", "schema": schema},
+        ]},
+        evidence=[],
+    )
+    assert warnings == []
+    assert steps[1] == {"action": "assert_header", "name": "x-version", "expected": "1"}
+    assert steps[2] == {"action": "assert_json_schema", "schema": schema}
 
 
 def test_device_lock_is_exclusive_and_offline_reclaim_clears_it():

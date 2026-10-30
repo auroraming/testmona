@@ -96,6 +96,10 @@ def _step_from_mapping(action: str, arguments: dict[str, Any], warnings: list[st
         return {"action": "assert_status", "expected": arguments.get("expected")}
     if normalized == "assert_json_path" and arguments.get("path") and "expected" in arguments:
         return {"action": "assert_json_path", "path": arguments.get("path"), "expected": arguments.get("expected")}
+    if normalized == "assert_header" and arguments.get("name") and "expected" in arguments:
+        return {"action": "assert_header", "name": arguments.get("name"), "expected": arguments.get("expected")}
+    if normalized == "assert_json_schema" and isinstance(arguments.get("schema"), dict):
+        return {"action": "assert_json_schema", "schema": arguments["schema"]}
     return None
 
 
