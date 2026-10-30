@@ -22,6 +22,7 @@ from ..database import get_db
 from ..services.automation_ci import render_ci_templates
 from ..services.automation_devices import acquire_lock, apply_offline_reclaim, release_lock
 from ..services.automation_openapi_scripts import materialize_api_scripts
+from ..services.automation_script_drafts import fixed_script_from_evidence
 from ..services.automation_policy import enforce_task_policy, validate_credential_names
 from ..services.mobile_mcp_discovery import IOS_DEPLOYMENT_NOTE, discovery_contract
 from .ai_automation import (
@@ -579,3 +580,162 @@ def register_ai_automation_platform_routes(app) -> None:
         return db.query(models.AIAutomationBudgetAlert).filter(
             models.AIAutomationBudgetAlert.task_id == task.id
         ).order_by(models.AIAutomationBudgetAlert.id).all()
+
+    @app.get("/ai-automation/tasks/{task_id}/token-usage", response_model=list[schemas.AIAutomationTokenLedger])
+    def list_ai_automation_token_usage(
+        task_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        task = _get_task(db, task_id)
+        if not rbac.has_permission(current_user, "read", task.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return db.query(models.AIAutomationTokenLedger).filter(
+            models.AIAutomationTokenLedger.task_id == task.id
+        ).order_by(models.AIAutomationTokenLedger.id).all()
+
+    def _suggestion_or_404(db: Session, task_id: int) -> models.AIAutomationFailureSuggestion:
+        suggestion = db.query(models.AIAutomationFailureSuggestion).filter(
+            models.AIAutomationFailureSuggestion.task_id == task_id
+        ).first()
+        if suggestion is None:
+            raise HTTPException(status_code=404, detail="Failure suggestion not found")
+        return suggestion
+
+    @app.get("/ai-automation/tasks/{task_id}/failure-suggestion", response_model=schemas.AIAutomationFailureSuggestion)
+    def read_ai_automation_failure_suggestion(
+        task_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        task = _get_task(db, task_id)
+        if not rbac.has_permission(current_user, "read", task.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return _suggestion_or_404(db, task.id)
+
+    def _decide_suggestion(db: Session, suggestion_id: int, current_user, decision: str):
+        suggestion = db.query(models.AIAutomationFailureSuggestion).filter(
+            models.AIAutomationFailureSuggestion.id == suggestion_id
+        ).first()
+        if suggestion is None:
+            raise HTTPException(status_code=404, detail="Failure suggestion not found")
+        if not rbac.has_permission(current_user, "execute", suggestion.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        if suggestion.status != "suggested":
+            raise HTTPException(status_code=409, detail="Failure suggestion was already decided")
+        suggestion.status = decision
+        suggestion.confirmed_by = current_user.id
+        suggestion.confirmed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(suggestion)
+        _audit_task_action(
+            db, user_id=current_user.id, action="update", task_id=suggestion.task_id,
+            project_id=suggestion.project_id,
+            description=f"AI automation failure suggestion {decision}",
+            metadata={
+                "actor_type": "user",
+                "suggestion_id": suggestion.id,
+                "category": suggestion.category,
+                "creates_defect": False,
+            },
+        )
+        return suggestion
+
+    @app.post("/ai-automation/failure-suggestions/{suggestion_id}/confirm", response_model=schemas.AIAutomationFailureSuggestion)
+    def confirm_ai_automation_failure_suggestion(
+        suggestion_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        return _decide_suggestion(db, suggestion_id, current_user, "confirmed")
+
+    @app.post("/ai-automation/failure-suggestions/{suggestion_id}/dismiss", response_model=schemas.AIAutomationFailureSuggestion)
+    def dismiss_ai_automation_failure_suggestion(
+        suggestion_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        return _decide_suggestion(db, suggestion_id, current_user, "dismissed")
+
+    @app.post(
+        "/ai-automation/tasks/{task_id}/script-drafts/from-evidence",
+        response_model=schemas.AIAutomationScriptDraft,
+        status_code=201,
+    )
+    def create_script_draft_from_evidence(
+        task_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        task = _get_task(db, task_id)
+        if not rbac.has_permission(current_user, "execute", task.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        evidence = db.query(models.AIAutomationEvidence).filter(
+            models.AIAutomationEvidence.task_id == task.id
+        ).order_by(models.AIAutomationEvidence.sequence).all()
+        try:
+            script, warnings = fixed_script_from_evidence(
+                execution_mode=task.execution_mode,
+                config=task.config if isinstance(task.config, dict) else {},
+                evidence=evidence,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        current = db.query(models.AIAutomationScriptDraft.revision).filter(
+            models.AIAutomationScriptDraft.source_task_id == task.id
+        ).order_by(models.AIAutomationScriptDraft.revision.desc()).first()
+        draft = models.AIAutomationScriptDraft(
+            project_id=task.project_id,
+            source_task_id=task.id,
+            environment_id=task.environment_id,
+            revision=(current[0] if current else 0) + 1,
+            source="exploration" if task.execution_mode == "ai" else "manual",
+            status="draft",
+            script=script,
+            note="; ".join(warnings) or None,
+            created_by=current_user.id,
+        )
+        db.add(draft)
+        db.commit()
+        db.refresh(draft)
+        _audit_task_action(
+            db, user_id=current_user.id, action="create", task_id=task.id, project_id=task.project_id,
+            description=f"AI automation script draft revision {draft.revision} generated from evidence",
+            metadata={"actor_type": "user", "draft_id": draft.id, "source": draft.source, "executes": False},
+        )
+        return draft
+
+    @app.post("/ai-automation/script-drafts/{draft_id}/rollback", response_model=schemas.AIAutomationScriptDraft, status_code=201)
+    def rollback_ai_automation_script_draft(
+        draft_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        source = db.query(models.AIAutomationScriptDraft).filter(models.AIAutomationScriptDraft.id == draft_id).first()
+        if source is None:
+            raise HTTPException(status_code=404, detail="Script draft not found")
+        if not rbac.has_permission(current_user, "execute", source.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        current = db.query(models.AIAutomationScriptDraft.revision).filter(
+            models.AIAutomationScriptDraft.source_task_id == source.source_task_id
+        ).order_by(models.AIAutomationScriptDraft.revision.desc()).first()
+        draft = models.AIAutomationScriptDraft(
+            project_id=source.project_id,
+            source_task_id=source.source_task_id,
+            environment_id=source.environment_id,
+            revision=(current[0] if current else 0) + 1,
+            source=source.source,
+            status="draft",
+            script=source.script,
+            note=f"Rollback draft of revision {source.revision}. This does not execute the script.",
+            created_by=current_user.id,
+        )
+        db.add(draft)
+        db.commit()
+        db.refresh(draft)
+        _audit_task_action(
+            db, user_id=current_user.id, action="create", task_id=source.source_task_id, project_id=source.project_id,
+            description=f"AI automation script draft rolled back to revision {source.revision} as draft {draft.revision}",
+            metadata={"actor_type": "user", "draft_id": draft.id, "rollback_of": source.id, "executes": False},
+        )
+        return draft

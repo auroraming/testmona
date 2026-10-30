@@ -59,6 +59,7 @@ class AgentRuntimeResult:
     input_tokens: int = 0
     output_tokens: int = 0
     error: dict[str, Any] | None = None
+    cached_tokens: int = 0
 
 
 CompletionFunction = Callable[..., Awaitable[AICompletionResult]]
@@ -156,6 +157,7 @@ class AutomationAgentRuntime:
         steps: list[AgentStep] = []
         input_tokens = 0
         output_tokens = 0
+        cached_tokens = 0
         try:
             await self.mcp_client.health()
             tools = await self.mcp_client.discover_tools()
@@ -164,7 +166,7 @@ class AutomationAgentRuntime:
 
             for _ in range(self.max_steps):
                 if await self._is_cancelled():
-                    return AgentRuntimeResult("cancelled", None, steps, input_tokens, output_tokens)
+                    return AgentRuntimeResult("cancelled", None, steps, input_tokens, output_tokens, cached_tokens=cached_tokens)
                 remaining = self.timeout_seconds - (time.monotonic() - started)
                 if remaining <= 0:
                     raise AgentRuntimeError("timeout", "Agent Runtime exceeded its task timeout", retryable=True)
@@ -191,6 +193,7 @@ class AutomationAgentRuntime:
                 )
                 input_tokens += completion.prompt_tokens
                 output_tokens += completion.completion_tokens
+                cached_tokens += getattr(completion, "cached_tokens", 0) or 0
                 if self.token_budget is not None and input_tokens + output_tokens > self.token_budget:
                     raise AgentRuntimeError("token_budget_exceeded", "AI response exceeded the task token budget")
 
@@ -201,7 +204,7 @@ class AutomationAgentRuntime:
                             "missing_assertion",
                             "AI cannot finish successfully without a passing assertion tool result",
                         )
-                    return AgentRuntimeResult("completed", decision.summary, steps, input_tokens, output_tokens)
+                    return AgentRuntimeResult("completed", decision.summary, steps, input_tokens, output_tokens, cached_tokens=cached_tokens)
 
                 step = AgentStep(len(steps) + 1, decision.tool or "", decision.arguments)
                 try:
@@ -220,7 +223,7 @@ class AutomationAgentRuntime:
             raise AgentRuntimeError("max_steps_exceeded", "Agent Runtime reached the maximum number of steps")
         except asyncio.TimeoutError as exc:
             error = AgentRuntimeError("timeout", "Agent Runtime exceeded its task timeout", retryable=True)
-            return AgentRuntimeResult("failed", None, steps, input_tokens, output_tokens, error.as_dict())
+            return AgentRuntimeResult("failed", None, steps, input_tokens, output_tokens, error.as_dict(), cached_tokens)
         except (AgentRuntimeError, AutomationMCPError) as exc:
             wrapped = exc if isinstance(exc, AgentRuntimeError) else AgentRuntimeError(exc.code, exc.message, retryable=exc.retryable)
-            return AgentRuntimeResult("failed", None, steps, input_tokens, output_tokens, wrapped.as_dict())
+            return AgentRuntimeResult("failed", None, steps, input_tokens, output_tokens, wrapped.as_dict(), cached_tokens)

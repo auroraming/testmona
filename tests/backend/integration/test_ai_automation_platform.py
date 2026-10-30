@@ -235,6 +235,138 @@ def test_device_inventory_lock_and_offline_reclaim(client):
     assert runner["id"] != other["id"]
 
 
+def test_failure_suggestion_confirmation_does_not_create_a_defect(client):
+    from app import models
+
+    _, token = _runner(client, "api", "api-failure")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "api", "goal": "Read orders",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    evidence = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [
+            {
+                "sequence": 1, "evidence_type": "network", "title": "GET /orders", "status": "completed",
+                "payload": {"method": "GET", "url": "https://user:secretpass@staging.example.test/orders?token=abcdef", "status": 500},
+            },
+            {
+                "sequence": 2, "evidence_type": "assertion", "title": "status", "status": "failed",
+                "payload": {"assertion": {"passed": False, "expected": 200, "actual": 500}},
+            },
+            {
+                "sequence": 3, "evidence_type": "log", "title": "note",
+                "payload": {"message": "Bearer runner-only-secret-value observed"},
+            },
+        ]},
+    )
+    assert evidence.status_code == 200, evidence.text
+    stored = evidence.json()
+    assert "secretpass" not in str(stored)
+    assert "runner-only-secret-value" not in str(stored)
+    assert "Bearer [redacted]" in str(stored)
+    report = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={
+            "lease_token": lease["lease_token"], "status": "failed",
+            "input_tokens": 12, "cached_tokens": 4, "output_tokens": 3,
+        },
+    )
+    assert report.status_code == 200, report.text
+    suggestion = client.get(f"/ai-automation/tasks/{task['id']}/failure-suggestion")
+    assert suggestion.status_code == 200, suggestion.text
+    assert suggestion.json()["category"] == "upstream_error"
+    assert "does not create or link a defect" in suggestion.json()["summary"]
+    assert "secretpass" not in suggestion.text
+    with client.SessionLocal() as db:
+        defects_before = db.query(models.Defect).count()
+    confirmed = client.post(f"/ai-automation/failure-suggestions/{suggestion.json()['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "confirmed"
+    with client.SessionLocal() as db:
+        assert db.query(models.Defect).count() == defects_before
+    usage = client.get(f"/ai-automation/tasks/{task['id']}/token-usage")
+    assert usage.status_code == 200, usage.text
+    assert usage.json()[0]["input_tokens"] == 12
+    assert usage.json()[0]["cached_tokens"] == 4
+    assert usage.json()[0]["output_tokens"] == 3
+    assert usage.json()[0]["estimated_cost_micros"] is None
+    repeated = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/report",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "status": "failed", "input_tokens": 12, "cached_tokens": 4, "output_tokens": 3},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert len(client.get(f"/ai-automation/tasks/{task['id']}/token-usage").json()) == 1
+
+
+def test_cancel_expiry_and_runner_concurrency_do_not_duplicate_work(client):
+    _, token = _runner(client, "web", "web-capacity")
+    headers = {"X-Runner-Token": token}
+    first = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "web", "goal": "First",
+    }).json()
+    second = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "web", "goal": "Second",
+    }).json()
+    lease = client.post("/internal/ai-automation/claim", headers=headers)
+    assert lease.status_code == 200, lease.text
+    assert lease.json()["task"]["id"] == first["id"]
+    blocked = client.post("/internal/ai-automation/claim", headers=headers)
+    assert blocked.status_code == 204, blocked.text
+    client.post(f"/ai-automation/tasks/{first['id']}/cancel")
+    from datetime import datetime, timedelta, timezone
+    from app import models
+    with client.SessionLocal() as db:
+        row = db.query(models.AIAutomationTask).filter(models.AIAutomationTask.id == first["id"]).one()
+        row.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        db.commit()
+    recovered = client.post("/internal/ai-automation/claim", headers=headers)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["task"]["id"] == second["id"]
+    assert client.get(f"/ai-automation/tasks/{first['id']}").json()["status"] == "cancelled"
+    assert client.get(f"/ai-automation/tasks/{first['id']}").json()["attempt_count"] == 1
+
+
+def test_evidence_becomes_a_script_draft_and_rollback_does_not_execute(client):
+    _, token = _runner(client, "web", "web-draft")
+    task = client.post("/ai-automation/tasks", json={
+        "project_id": client.project_id, "runner_type": "web", "execution_mode": "ai", "goal": "Explore login",
+    }).json()
+    headers = {"X-Runner-Token": token}
+    lease = client.post("/internal/ai-automation/claim", headers=headers).json()
+    secret = "super-secret-token-value"
+    evidence = client.post(
+        f"/internal/ai-automation/tasks/{task['id']}/evidence",
+        headers=headers,
+        json={"lease_token": lease["lease_token"], "items": [
+            {"sequence": 1, "evidence_type": "step", "title": "navigate", "payload": {"tool": "browser_navigate", "url": f"https://user:{secret}@staging.example.test/login"}},
+            {"sequence": 2, "evidence_type": "step", "title": "fill", "payload": {"action": "fill", "selector": "#password", "value": secret}},
+            {"sequence": 3, "evidence_type": "assertion", "title": "visible", "status": "passed", "payload": {"action": "assert_visible", "selector": "#home"}},
+        ]},
+    )
+    assert evidence.status_code == 200, evidence.text
+    assert secret not in evidence.text
+    before = client.get("/ai-automation/tasks", params={"project_id": client.project_id}).json()
+    draft = client.post(f"/ai-automation/tasks/{task['id']}/script-drafts/from-evidence")
+    assert draft.status_code == 201, draft.text
+    body = draft.json()
+    assert body["status"] == "draft"
+    assert body["source"] == "exploration"
+    assert secret not in str(body)
+    assert body["script"][0]["url"] == "https://staging.example.test/login"
+    assert body["script"][1]["value"] == "[redacted]"
+    rolled = client.post(f"/ai-automation/script-drafts/{body['id']}/rollback")
+    assert rolled.status_code == 201, rolled.text
+    assert rolled.json()["revision"] == 2
+    assert rolled.json()["status"] == "draft"
+    after = client.get("/ai-automation/tasks", params={"project_id": client.project_id}).json()
+    assert [item["id"] for item in after] == [item["id"] for item in before]
+
+
 def test_openapi_scripts_and_draft_approval_do_not_auto_execute(client):
     document = {
         "openapi": "3.0.3",

@@ -112,6 +112,7 @@ class AutomationRunnerProtocol:
             },
             "error_message": result.error.get("message") if result.error else None,
             "input_tokens": result.input_tokens,
+            "cached_tokens": result.cached_tokens,
             "output_tokens": result.output_tokens,
         }
         return (await self._request(

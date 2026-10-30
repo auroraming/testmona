@@ -537,6 +537,7 @@ class AIAutomationTask(Base):
     timeout_seconds = Column(Integer, nullable=False, default=900)
     token_budget = Column(Integer, nullable=True)
     input_tokens = Column(Integer, nullable=False, default=0)
+    cached_tokens = Column(Integer, nullable=False, default=0)
     output_tokens = Column(Integer, nullable=False, default=0)
     runner_id = Column(Integer, ForeignKey("ai_automation_runners.id", ondelete="SET NULL"), nullable=True, index=True)
     lease_token_hash = Column(String(64), nullable=True)
@@ -724,3 +725,47 @@ class AIAutomationBudgetAlert(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     task = relationship("AIAutomationTask")
+
+
+class AIAutomationTokenLedger(Base):
+    """Immutable input, cache, and output token record. Cost stays empty without a provider price."""
+
+    __tablename__ = "ai_automation_token_ledger"
+    __table_args__ = (
+        UniqueConstraint("task_id", "entry_type", name="uq_ai_automation_token_ledger_entry"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    entry_type = Column(String(30), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    cached_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    estimated_cost_micros = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask", foreign_keys="AIAutomationTokenLedger.task_id")
+
+
+class AIAutomationFailureSuggestion(Base):
+    """Human-confirmed failure note. It is not a defect and has no defect link."""
+
+    __tablename__ = "ai_automation_failure_suggestions"
+    __table_args__ = (
+        UniqueConstraint("task_id", name="uq_ai_automation_failure_suggestion_task"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="suggested")
+    category = Column(String(40), nullable=False)
+    summary = Column(Text, nullable=False)
+    signals = Column(JSON, nullable=False, default=list)
+    content_hash = Column(String(64), nullable=False)
+    confirmed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask", foreign_keys="AIAutomationFailureSuggestion.task_id")

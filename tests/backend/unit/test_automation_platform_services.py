@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.services.ai_manager import _usage_from_openai_payload
 from app.services.automation_budget import budget_levels
 from app.services.automation_devices import acquire_lock, apply_offline_reclaim, release_lock
 from app.services.automation_openapi_scripts import materialize_api_scripts
@@ -38,6 +39,14 @@ def test_native_and_mcp_results_share_one_shape():
     assert native["passed"] is True and mcp["passed"] is True
     assert native["assertions"] == mcp["assertions"]
     assert normalize_api_result("api_mcp", {"ok": True, "assertions": []})["passed"] is False
+
+
+def test_provider_cache_tokens_are_recorded_without_a_price():
+    prompt, completion, cached = _usage_from_openai_payload({
+        "usage": {"prompt_tokens": 20, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 7}},
+    })
+    assert (prompt, completion, cached) == (20, 5, 7)
+    assert _usage_from_openai_payload({"usage": {"prompt_tokens": 1, "completion_tokens": 1}})[2] == 0
 
 
 def test_budget_alerts_do_not_invent_a_price():

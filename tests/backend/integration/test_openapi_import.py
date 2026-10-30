@@ -259,6 +259,52 @@ def test_commit_rejects_section_from_another_suite(client):
     assert "Section must belong" in response.json()["detail"]
 
 
+def test_pasted_openapi_resolves_local_refs_and_strategy(client):
+    document = {
+        "openapi": "3.0.3",
+        "info": {"title": "Pasted API", "version": "1"},
+        "components": {"parameters": {"UserId": {
+            "name": "userId", "in": "path", "required": True,
+            "schema": {"type": "string", "maxLength": 3, "example": "42"},
+        }}},
+        "paths": {"/users/{userId}": {"get": {
+            "summary": "Get user",
+            "parameters": [{"$ref": "#/components/parameters/UserId"}],
+            "responses": {"200": {"description": "OK"}},
+        }}},
+    }
+    pasted = client.post("/import-export/openapi/preview-text", json={
+        "project_id": client.project_id,
+        "text": json.dumps(document),
+        "strategy": "constraints",
+    })
+    assert pasted.status_code == 200, pasted.text
+    titles = [item["title"] for item in pasted.json()["drafts"]]
+    assert any("missing required userId" in title for title in titles)
+    assert any("over maxLength" in title for title in titles)
+    success_only = client.post("/import-export/openapi/preview-text", json={
+        "project_id": client.project_id,
+        "text": json.dumps(document),
+        "strategy": "success_only",
+    })
+    assert success_only.status_code == 200, success_only.text
+    assert len(success_only.json()["drafts"]) == 1
+    cyclic = {
+        "openapi": "3.0.3",
+        "info": {"title": "Cycle", "version": "1"},
+        "paths": {"/a": {"get": {"responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/A"}}}}}}}},
+        "components": {"schemas": {
+            "A": {"type": "object", "properties": {"b": {"$ref": "#/components/schemas/B"}}},
+            "B": {"type": "object", "properties": {"a": {"$ref": "#/components/schemas/A"}}},
+        }},
+    }
+    rejected = client.post("/import-export/openapi/preview-text", json={
+        "project_id": client.project_id, "text": json.dumps(cyclic),
+    })
+    assert rejected.status_code == 400
+    assert "Cyclic" in rejected.text
+
+
 def test_openapi_import_rejects_project_outsider(client):
     from app import models
 

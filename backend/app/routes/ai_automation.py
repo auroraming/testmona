@@ -20,6 +20,7 @@ from .. import models, rbac, schemas
 from ..auth import get_current_active_user
 from ..database import get_db
 from ..services.automation_budget import budget_levels
+from ..services.automation_failure import build_failure_suggestion
 from ..services.automation_policy import enforce_task_policy
 from ..services.automation_results import archived_result, archive_terminal_status
 
@@ -97,6 +98,54 @@ def _max_attempts(task: models.AIAutomationTask) -> int:
     except (TypeError, ValueError):
         value = 1
     return min(5, max(1, value))
+
+
+def _max_concurrent(runner: models.AIAutomationRunner) -> int:
+    raw = (runner.capabilities or {}).get("max_concurrent", 1) if isinstance(runner.capabilities, dict) else 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 1
+    return min(20, max(1, value))
+
+
+def _record_token_ledger(db: Session, task: models.AIAutomationTask) -> None:
+    """Store the terminal token triple. Provider cost is left empty on purpose."""
+    exists = db.query(models.AIAutomationTokenLedger).filter(
+        models.AIAutomationTokenLedger.task_id == task.id,
+        models.AIAutomationTokenLedger.entry_type == "terminal",
+    ).first()
+    if exists is not None:
+        return
+    db.add(models.AIAutomationTokenLedger(
+        task_id=task.id,
+        project_id=task.project_id,
+        entry_type="terminal",
+        input_tokens=task.input_tokens or 0,
+        cached_tokens=task.cached_tokens or 0,
+        output_tokens=task.output_tokens or 0,
+        estimated_cost_micros=None,
+    ))
+
+
+def _record_failure_suggestion(db: Session, task: models.AIAutomationTask, evidence: list) -> None:
+    built = build_failure_suggestion(task.status, task.error_message, evidence)
+    if built is None:
+        return
+    existing = db.query(models.AIAutomationFailureSuggestion).filter(
+        models.AIAutomationFailureSuggestion.task_id == task.id
+    ).first()
+    if existing is not None:
+        return
+    db.add(models.AIAutomationFailureSuggestion(
+        task_id=task.id,
+        project_id=task.project_id,
+        status="suggested",
+        category=built["category"],
+        summary=built["summary"],
+        signals=built["signals"],
+        content_hash=built["content_hash"],
+    ))
 
 
 def _record_budget_alerts(db: Session, task: models.AIAutomationTask) -> None:
@@ -420,10 +469,20 @@ def register_ai_automation_routes(app) -> None:
                     models.AIAutomationTask.status == "queued",
                     (models.AIAutomationTask.status == "running")
                     & (models.AIAutomationTask.lease_expires_at < now),
+                    (models.AIAutomationTask.status == "cancel_requested")
+                    & (models.AIAutomationTask.lease_expires_at < now),
                 ),
             ).order_by(models.AIAutomationTask.id).with_for_update(skip_locked=True).first()
             if task is None:
                 break
+            if task.status == "cancel_requested":
+                task.status = "cancelled"
+                task.completed_at = now
+                task.error_message = task.error_message or "Cancellation completed after the runner lease expired"
+                task.lease_token_hash = None
+                db.commit()
+                task = None
+                continue
             if task.status == "running" and task.attempt_count >= _max_attempts(task):
                 task.status = "timed_out"
                 task.completed_at = now
@@ -437,6 +496,16 @@ def register_ai_automation_routes(app) -> None:
             db.commit()
             response.status_code = 204
             return None
+        if task.status == "queued":
+            active = db.query(models.AIAutomationTask).filter(
+                models.AIAutomationTask.runner_id == runner.id,
+                models.AIAutomationTask.status == "running",
+                models.AIAutomationTask.lease_expires_at > now,
+            ).count()
+            if active >= _max_concurrent(runner):
+                db.commit()
+                response.status_code = 204
+                return None
         lease_token = secrets.token_urlsafe(32)
         task.runner_id = runner.id
         task.lease_token_hash = _token_hash(lease_token)
@@ -499,8 +568,11 @@ def register_ai_automation_routes(app) -> None:
         task.result = archived_result(payload.status, payload.result, archive_reason)
         task.error_message = payload.error_message or archive_reason
         task.input_tokens = payload.input_tokens
+        task.cached_tokens = payload.cached_tokens
         task.output_tokens = payload.output_tokens
         task.completed_at = datetime.now(timezone.utc)
+        _record_token_ledger(db, task)
+        _record_failure_suggestion(db, task, evidence)
         _record_budget_alerts(db, task)
         db.commit()
         db.refresh(task)

@@ -894,6 +894,7 @@ class AIAutomationTask(BaseModel):
     timeout_seconds: int
     token_budget: Optional[int] = None
     input_tokens: int
+    cached_tokens: int = 0
     output_tokens: int
     runner_id: Optional[int] = None
     batch_id: Optional[int] = None
@@ -978,6 +979,7 @@ class AIAutomationTaskReport(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = Field(None, max_length=4000)
     input_tokens: int = Field(0, ge=0)
+    cached_tokens: int = Field(0, ge=0)
     output_tokens: int = Field(0, ge=0)
 
     @field_validator("status")
@@ -1016,6 +1018,12 @@ class AIAutomationEvidenceCreate(BaseModel):
     @field_validator("payload")
     @classmethod
     def validate_payload(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        from ..services.automation_redaction import scrub_payload
+
+        try:
+            value = scrub_payload(value)
+        except ValueError:
+            raise
         if _contains_inline_secret(value):
             raise ValueError("evidence cannot contain inline secrets")
         if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
@@ -1236,6 +1244,36 @@ class AIAutomationBudgetAlert(BaseModel):
     output_tokens: int
     token_budget: int
     estimated_cost_micros: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationTokenLedger(BaseModel):
+    id: int
+    task_id: int
+    project_id: int
+    entry_type: str
+    input_tokens: int
+    cached_tokens: int
+    output_tokens: int
+    estimated_cost_micros: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationFailureSuggestion(BaseModel):
+    id: int
+    task_id: int
+    project_id: int
+    status: str
+    category: str
+    summary: str
+    signals: List[Dict[str, Any]]
+    content_hash: str
+    confirmed_by: Optional[int] = None
+    confirmed_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

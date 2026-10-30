@@ -150,3 +150,15 @@ stays null until a provider price exists. Script drafts record source,
 revision, environment, and approver, and approval does not enqueue a run.
 Production environment types and payment-like hosts stay denied. Docker
 end-to-end browser, device, and live MCP acceptance are still open.
+
+Failure suggestions are derived from assertion, network, log, and screenshot
+references. Confirming one records an audit entry and does not create a defect.
+Exploration evidence can be saved as another script draft, and rollback copies
+an older revision into a new draft without executing it. Terminal reports append
+one token ledger row with input, provider-reported cached, and output counts.
+`estimated_cost_micros` stays null. A runner defaults to one active lease;
+`capabilities.max_concurrent` can raise that cap to 20. An expired cancellation
+lease is finalized as cancelled on the same task. OpenAPI preview accepts pasted
+text, resolves local JSON pointers with a depth and cycle limit, and can emit
+success-only, required-field, or constraint-boundary drafts. Remote references
+stay rejected.

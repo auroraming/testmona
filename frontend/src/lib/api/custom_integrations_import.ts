@@ -252,14 +252,23 @@ const createIdempotencyKey = () => (
 
 // Import/Export API
 export const importExportAPI = {
-  previewOpenAPI: async (projectId: number, file: File) => {
+  previewOpenAPI: async (projectId: number, file: File, strategy = 'success_and_required') => {
     const formData = new FormData();
     formData.append('project_id', String(projectId));
+    formData.append('strategy', strategy);
     formData.append('file', file);
     const response = await api.post('/import-export/openapi/preview', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000,
     });
+    return response.data as OpenAPIPreview;
+  },
+  previewOpenAPIText: async (projectId: number, text: string, strategy = 'success_and_required') => {
+    const response = await api.post('/import-export/openapi/preview-text', {
+      project_id: projectId,
+      text,
+      strategy,
+    }, { timeout: 300000 });
     return response.data as OpenAPIPreview;
   },
   commitOpenAPI: async (payload: OpenAPICommitPayload) => {
