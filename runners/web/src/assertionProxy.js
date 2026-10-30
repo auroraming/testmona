@@ -123,6 +123,19 @@ function assertionResult(passed, expected, actual) {
   };
 }
 
+export function pageLocations(result) {
+  const locations = [];
+  for (const line of contentText(result).split('\n')) {
+    const match = /page url\s*:\s*(\S+)/iu.exec(line);
+    if (match) locations.push(match[1].replace(/[).,]+$/u, ''));
+  }
+  return locations;
+}
+
+function isAbnormalLocation(url, allowedOrigin) {
+  return Boolean(url) && !pageStaysOnOrigin(url, allowedOrigin);
+}
+
 export function listTabLocations(result) {
   const tabs = [];
   for (const line of contentText(result).split('\n')) {
@@ -241,7 +254,7 @@ export class PlaywrightAssertionProxy {
       if (checksOrigin) await this.#ensureOnOrigin(result, name !== 'browser_navigate_back');
       return result;
     } catch (error) {
-      if (checksOrigin) await this.#ensureOnOrigin({ content: [] }, name !== 'browser_navigate_back').catch(() => {});
+      if (checksOrigin) await this.#ensureOnOrigin(error?.result || { content: [] }, name !== 'browser_navigate_back').catch(() => {});
       throw error;
     }
   }
@@ -269,16 +282,21 @@ export class PlaywrightAssertionProxy {
   }
 
   async #ensureOnOrigin(actionResult, navigateBack) {
-    const current = extractPageLocation(actionResult);
     const listed = await this.#observe('browser_tabs', { action: 'list' }).catch(() => null);
     const tabs = listed ? listTabLocations(listed) : [];
-    const badTabs = tabs.filter((tab) => !pageStaysOnOrigin(tab.url, this.allowedOrigin));
-    const currentBad = Boolean(current && !pageStaysOnOrigin(current, this.allowedOrigin));
+    const pageUrls = [...pageLocations(actionResult), ...(listed ? pageLocations(listed) : [])];
+    const pageBad = pageUrls.some((url) => isAbnormalLocation(url, this.allowedOrigin));
+    const badTabs = tabs.filter((tab) => isAbnormalLocation(tab.url, this.allowedOrigin));
+    // Real MCP keeps the original origin in the tab link and puts chrome-error on the Page URL line.
+    if (pageBad) {
+      const currentTab = tabs.find((tab) => tab.current) ?? tabs[0];
+      if (currentTab && !badTabs.some((tab) => tab.index === currentTab.index)) badTabs.push(currentTab);
+    }
     // Cross-origin iframes stay inside the browser sandbox. Only the top-level
     // tab origin is enforced; rejecting every third-party frame would fail ordinary pages.
-    if (!badTabs.length && !currentBad) return;
-    if (navigateBack && currentBad) await this.client.callTool('browser_navigate_back', {}).catch(() => {});
-    for (const tab of badTabs.sort((left, right) => right.index - left.index)) {
+    if (!badTabs.length && !pageBad) return;
+    if (navigateBack && pageBad) await this.client.callTool('browser_navigate_back', {}).catch(() => {});
+    for (const tab of [...badTabs].sort((left, right) => right.index - left.index)) {
       await this.client.callTool('browser_tabs', { action: 'close', index: tab.index }).catch(() => {});
     }
     throw new Error('Navigation left the allowed origin');

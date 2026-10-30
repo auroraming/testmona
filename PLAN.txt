@@ -128,6 +128,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：补齐 Trace 子目录上传、模型 prompt 保留已执行步骤，以及 isError 时按 Page URL 关闭 chrome-error 标签。
 - 2026-10-30：补齐 Web AI 证据链。截图在删除临时目录前上传并写入 artifact_ref；devtools Trace 与控制台日志同样回写。任务终态同步关联的测试结果、执行记录和测试轮次状态。
 - 2026-10-30：修复 Web AI 验收失败项。MCP 客户端改为 @playwright/mcp@0.0.83 使用的换行 JSON；过期租约不能补全、续约或回报通过；导航和点击后检查最终页面 Origin；镜像通过 npm overrides 把 MCP 绑定到 playwright-core 1.64.1 / Chromium 1248，不再使用 npx 或 --browser=chrome。文本断言改为整词匹配，自动截图写入临时目录，非法 Origin 在保存任务或环境时拒绝。
 - 2026-10-30：接通 Playwright MCP 断言代理与 Worker 生命周期。Web AI 任务要求环境 app_url 或 base_url 为不含路径的 Origin；Runner 启动精确版本 `@playwright/mcp@0.0.83`，并在成功、失败、取消或启动失败后关闭进程。本地断言覆盖文本、可见性、URL 和已捕获的同源网络请求，导航越出 Origin、任意代码、请求明细和文件写入参数会被拒绝。工具调用成功不会记为通过。Web Runner 通过租约保护的补全接口向 AI Manager 要下一步决策，该接口只累计 Token，不改变通过状态。未声明 execution_modes 的 Web Runner 在工作台中同时兼容 AI 与固定脚本。批量回归、CI 模板和真实浏览器端到端验收仍未完成；MCP 包版本独立于固定脚本使用的 Playwright 1.64.1。

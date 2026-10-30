@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { executeWebAi, runWebAiLoop } from '../src/aiExecutor.js';
+import { buildPrompt, executeWebAi, runWebAiLoop } from '../src/aiExecutor.js';
 
 function protocol(decisions) {
   const events = { evidence: [], reports: [], completions: 0 };
@@ -115,7 +115,9 @@ test('uploads screenshot, trace, and console log before the worker stops', async
         async callTool(name) {
           if (name === 'browser_console_messages') return { content: [{ type: 'text', text: 'console ready' }] };
           if (name === 'browser_stop_tracing') {
-            await writeFile(path.join(dir, 'trace.trace'), Buffer.from('PK'));
+            await mkdir(path.join(dir, 'traces'), { recursive: true });
+            await writeFile(path.join(dir, 'traces', 'trace-99.trace'), Buffer.from('PK'));
+            await writeFile(path.join(dir, 'traces', 'trace-99.network'), Buffer.from('net'));
             return { content: [] };
           }
           if (name === 'browser_snapshot') return { content: [{ type: 'text', text: 'heading "Welcome"' }] };
@@ -133,9 +135,29 @@ test('uploads screenshot, trace, and console log before the worker stops', async
   const trace = runner.events.evidence.find((item) => item.evidence_type === 'trace');
   const log = runner.events.evidence.find((item) => item.evidence_type === 'log');
   assert.equal(screenshot.artifact_ref, 'ai-automation/7/page.png');
-  assert.match(trace.artifact_ref, /trace\.trace/);
+  assert.match(trace.artifact_ref, /trace-99\.trace/);
   assert.match(log.artifact_ref, /console\.txt/);
   assert.equal(stopped, 1);
+});
+
+test('keeps completed steps when tool schemas exceed the prompt budget', () => {
+  const tools = Array.from({ length: 30 }, (_, index) => ({
+    name: `browser_tool_${index}`,
+    description: 'd'.repeat(400),
+    input_schema: { type: 'object', properties: { blob: { type: 'string', description: 's'.repeat(4000) } } },
+  }));
+  const steps = [{
+    sequence: 1,
+    tool: 'browser_snapshot',
+    arguments: { target: 'e1' },
+    output: { structured_content: { passed: false }, content: [{ type: 'text', text: 'heading Welcome' }] },
+    error: null,
+  }];
+  const prompt = buildPrompt(lease(), tools, steps);
+  assert.ok(prompt.includes('Completed steps:'));
+  assert.ok(prompt.includes('browser_snapshot'));
+  assert.equal(prompt.includes('s'.repeat(200)), false);
+  assert.ok(prompt.length <= 12000);
 });
 
 test('cancellation and startup failure stop cleanly', async () => {

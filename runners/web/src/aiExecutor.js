@@ -40,25 +40,57 @@ function buildGoal(lease) {
   return parts.filter(Boolean).join('\n');
 }
 
-function renderPrompt(lease, tools, steps) {
-  return [
-    'You are TestMona\'s constrained test automation agent. Choose exactly one next action. ',
-    'Return JSON only: either {"type":"tool","tool":"name","arguments":{...}} or {"type":"finish","summary":"..."}. ',
-    'Never claim success merely because a tool ran; assertions must be explicit tool results.',
-    `Goal: ${buildGoal(lease)}`,
-    `Allowed tools: ${JSON.stringify(tools)}`,
-    `Completed steps: ${JSON.stringify(steps)}`,
-  ].join('\n');
+function compactStep(step) {
+  const text = (step.output?.content || [])
+    .filter((item) => item?.type === 'text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join(' ')
+    .slice(0, 240);
+  return {
+    sequence: step.sequence,
+    tool: step.tool,
+    arguments: step.arguments,
+    passed: step.output?.structured_content?.passed ?? null,
+    error: step.error?.message || null,
+    observation: text,
+  };
 }
 
-function buildPrompt(lease, tools, steps) {
-  let history = steps;
-  let prompt = renderPrompt(lease, tools, history);
-  while (prompt.length > 11000 && history.length) {
-    history = history.slice(1);
-    prompt = renderPrompt(lease, tools, history);
+export function buildPrompt(lease, tools, steps) {
+  const instruction = 'You are TestMona\'s constrained test automation agent. Choose exactly one next action. Return JSON only: either {"type":"tool","tool":"name","arguments":{...}} or {"type":"finish","summary":"..."}. Never claim success merely because a tool ran; assertions must be explicit tool results.';
+  const goal = `Goal: ${buildGoal(lease)}`.slice(0, 3500);
+  let history = (steps || []).map(compactStep);
+  const render = (catalog) => [
+    instruction,
+    goal,
+    `Completed steps: ${JSON.stringify(history)}`,
+    `Allowed tools: ${JSON.stringify(catalog)}`,
+  ].join('\n');
+  let catalog = tools.map((tool) => ({
+    name: tool.name,
+    description: String(tool.description || '').slice(0, 120),
+  }));
+  let prompt = render(catalog);
+  while (prompt.length > 11000 && catalog.some((tool) => tool.description)) {
+    catalog = catalog.map((tool) => ({ name: tool.name }));
+    prompt = render(catalog);
   }
-  return prompt.slice(0, 11000);
+  while (prompt.length > 11000 && history.length > 1) {
+    history = history.slice(1);
+    prompt = render(catalog);
+  }
+  if (prompt.length > 11000) {
+    prompt = [
+      instruction,
+      goal.slice(0, 800),
+      `Completed steps: ${JSON.stringify(history)}`,
+      `Allowed tools: ${JSON.stringify(catalog.map((tool) => tool.name))}`,
+    ].join('\n');
+  }
+  if (!prompt.includes('Completed steps:')) {
+    prompt = `${instruction}\nCompleted steps: ${JSON.stringify(history)}`;
+  }
+  return prompt.length > 12000 ? `${prompt.slice(0, prompt.indexOf('Completed steps:'))}Completed steps: ${JSON.stringify(history)}`.slice(0, 12000) : prompt;
 }
 
 export function parseDecision(content) {
@@ -99,17 +131,27 @@ function evidenceFor(step) {
 async function uploadNewArtifacts(outputDir, protocol, lease, seen) {
   if (!outputDir) return [];
   const uploaded = [];
-  const names = await readdir(outputDir).catch(() => []);
-  for (const name of names) {
-    if (seen.has(name)) continue;
-    const contentType = ARTIFACT_TYPES[path.extname(name).toLowerCase()];
-    if (!contentType) continue;
-    const fullPath = path.join(outputDir, name);
-    seen.add(name);
-    const artifact = await protocol.uploadArtifact(lease, await readFile(fullPath), name, contentType);
-    uploaded.push({ name, contentType, artifact_ref: artifact.artifact_ref });
-  }
+  await collectArtifacts(outputDir, outputDir, protocol, lease, seen, uploaded);
   return uploaded;
+}
+
+async function collectArtifacts(directory, root, protocol, lease, seen, uploaded) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    const relative = path.relative(root, fullPath);
+    if (seen.has(relative)) continue;
+    if (entry.isDirectory()) {
+      await collectArtifacts(fullPath, root, protocol, lease, seen, uploaded);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const contentType = ARTIFACT_TYPES[path.extname(entry.name).toLowerCase()];
+    if (!contentType) continue;
+    seen.add(relative);
+    const artifact = await protocol.uploadArtifact(lease, await readFile(fullPath), entry.name, contentType);
+    uploaded.push({ name: relative, contentType, artifact_ref: artifact.artifact_ref });
+  }
 }
 
 async function publishStep(protocol, lease, step, outputDir, seen) {
@@ -143,7 +185,8 @@ export async function finalizeWebAiEvidence({ lease, protocol, session, stepCoun
     }
   }
   const uploaded = await uploadNewArtifacts(outputDir, protocol, lease, seen);
-  const trace = uploaded.find((file) => file.name.endsWith('.trace') || file.name.endsWith('.zip'));
+  const traces = uploaded.filter((file) => file.name.endsWith('.trace') || file.name.endsWith('.zip'));
+  const trace = traces.find((file) => file.name.split(path.sep).includes('traces')) || traces[0];
   if (trace) {
     await protocol.appendEvidence(lease, [{
       sequence: stepCount + 2,

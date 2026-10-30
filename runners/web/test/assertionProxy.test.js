@@ -86,16 +86,25 @@ test('closes a chrome-error tab left by target=_blank and restores a failed navi
   const failing = {
     async callTool(name, args) {
       calls.push([name, args]);
-      if (name === 'browser_navigate') throw new Error("Tool 'browser_navigate' returned an error");
+      if (name === 'browser_navigate') {
+        const error = new Error("Tool 'browser_navigate' returned an error");
+        error.result = {
+          content: [{
+            type: 'text',
+            text: '- 0: (current) [Example](https://example.test/redirect)\n- Page URL: chrome-error://chromewebdata/',
+          }],
+        };
+        throw error;
+      }
       if (name === 'browser_tabs' && args.action === 'list') {
-        return { content: [{ type: 'text', text: '- 0: (current) [Err](chrome-error://chromewebdata/)' }] };
+        return { content: [{ type: 'text', text: '- 0: (current) [Example](https://example.test/redirect)' }] };
       }
       return { content: [] };
     },
   };
   const recovery = new PlaywrightAssertionProxy(failing, 'https://example.test');
   await assert.rejects(() => recovery.callTool('browser_navigate', { url: 'https://example.test/redirect' }), /returned an error/);
-  assert.ok(calls.some((call) => call[0] === 'browser_tabs' && call[1].action === 'close'));
+  assert.ok(calls.some((call) => call[0] === 'browser_tabs' && call[1].action === 'close' && call[1].index === 0));
 });
 
 test('origin normalization matches WHATWG default ports and IPv6', async () => {

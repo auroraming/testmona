@@ -140,7 +140,11 @@ export function createStdioMcpClient(child, timeoutMs = 30000) {
     },
     async callTool(name, args) {
       const result = await request('tools/call', { name, arguments: args || {} });
-      if (result?.isError) throw new Error(`Tool '${name}' returned an error`);
+      if (result?.isError) {
+        const error = new Error(`Tool '${name}' returned an error`);
+        error.result = { content: result.content || [], structured_content: result.structuredContent || null };
+        throw error;
+      }
       return { content: result?.content || [], structured_content: result?.structuredContent || null };
     },
   };
