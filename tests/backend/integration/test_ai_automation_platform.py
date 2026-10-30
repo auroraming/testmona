@@ -406,3 +406,12 @@ def test_openapi_scripts_and_draft_approval_do_not_auto_execute(client):
     assert approved.json()["status"] == "approved"
     after = client.get("/ai-automation/tasks", params={"project_id": client.project_id}).json()
     assert [item["id"] for item in after] == [item["id"] for item in before]
+    assert client.post("/ai-automation/script-drafts/999999/enqueue").status_code == 404
+    queued = client.post(f"/ai-automation/script-drafts/{draft.json()['id']}/enqueue")
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["execution_mode"] == "script"
+    assert queued.json()["config"]["script_draft_id"] == draft.json()["id"]
+    assert queued.json()["config"]["script"][0]["action"] == "request"
+    repeated = client.post(f"/ai-automation/script-drafts/{draft.json()['id']}/enqueue")
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["id"] == queued.json()["id"]

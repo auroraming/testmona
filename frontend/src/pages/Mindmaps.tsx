@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { MindmapCanvas, type MindmapCanvasHandle } from '@/components/MindmapCanvas';
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
-import { fromMindElixirData, toMindElixirData } from '@/lib/mindmapAdapters';
+import { fromMindElixirData, listXMindSheets, mindmapFromXMindContent, parseXMindXml, toMindElixirData, type XMindSheetSummary } from '@/lib/mindmapAdapters';
 import { getApiErrorMessage, mindmapsAPI, testCasesAPI, type MindmapData, type MindmapLinkedTestCase, type MindmapNode, type TestMindmap } from '@/lib/api';
 
 const freshData = (title: string): MindmapData => {
@@ -36,6 +36,7 @@ export function Mindmaps() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [pendingSheets, setPendingSheets] = useState<{ content: unknown; sheets: XMindSheetSummary[]; fileName: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
@@ -91,6 +92,21 @@ export function Mindmaps() {
     }
   };
 
+  const createImportedMindmap = async (content: unknown, sheetId: string, fileName: string) => {
+    const data = mindmapFromXMindContent(content, sheetId);
+    const root = data.nodes.find((node) => node.id === data.rootId);
+    const sheet = listXMindSheets(content).find((item) => item.id === sheetId);
+    const name = (root?.title || sheet?.title || fileName.replace(/\.xmind$/i, '') || t('mindmaps')).slice(0, 255);
+    const created = await mindmapsAPI.create({
+      name,
+      description: null,
+      project_id: numericProjectId,
+      mindmap_data: data,
+    });
+    toast({ title: t('mindmapImported') });
+    navigate(`/projects/${numericProjectId}/mindmaps/${created.id}`);
+  };
+
   const importXMind = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -106,19 +122,23 @@ export function Mindmaps() {
 
     setImporting(true);
     try {
-      const { importXMindFile, convertXmindToMindElixir } = await import('@mind-elixir/import-xmind');
-      const sheets = await importXMindFile(file);
+      const { default: JSZip } = await import('jszip');
+      const zip = await JSZip.loadAsync(await file.arrayBuffer());
+      const jsonFile = zip.file('content.json');
+      const xmlFile = zip.file('content.xml');
+      const content = jsonFile
+        ? JSON.parse(await jsonFile.async('string'))
+        : xmlFile
+          ? parseXMindXml(await xmlFile.async('string'))
+          : null;
+      if (!content) throw new Error(t('mindmapImportEmpty'));
+      const sheets = listXMindSheets(content);
       if (!sheets.length) throw new Error(t('mindmapImportEmpty'));
-      const imported = convertXmindToMindElixir(sheets[0]);
-      const name = (imported.nodeData.topic?.trim() || sheets[0].title?.trim() || file.name.replace(/\.xmind$/i, '') || t('mindmaps')).slice(0, 255);
-      const created = await mindmapsAPI.create({
-        name,
-        description: null,
-        project_id: numericProjectId,
-        mindmap_data: fromMindElixirData(imported),
-      });
-      toast({ title: t('mindmapImported') });
-      navigate(`/projects/${numericProjectId}/mindmaps/${created.id}`);
+      if (sheets.length > 1) {
+        setPendingSheets({ content, sheets, fileName: file.name });
+        return;
+      }
+      await createImportedMindmap(content, sheets[0].id, file.name);
     } catch (error) {
       toast({
         title: t('mindmapImportFailed'),
@@ -231,6 +251,29 @@ export function Mindmaps() {
         <Textarea value={newDescription} onChange={(event) => setNewDescription(event.target.value)} placeholder={t('description')} />
         <DialogFooter><Button variant="outline" onClick={() => setCreateOpen(false)}>{t('cancel')}</Button><Button onClick={() => void createMindmap()} disabled={!newName.trim()}>{t('create')}</Button></DialogFooter>
       </DialogContent></Dialog>
+
+      <Dialog open={Boolean(pendingSheets)} onOpenChange={(open) => !open && setPendingSheets(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{t('xmindChooseSheet')}</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">{t('xmindChooseSheetDescription')}</p>
+          <div className="space-y-2">
+            {pendingSheets?.sheets.map((sheet) => (
+              <Button key={sheet.id} variant="outline" className="w-full justify-between" onClick={() => {
+                const pending = pendingSheets;
+                setPendingSheets(null);
+                setImporting(true);
+                void createImportedMindmap(pending.content, sheet.id, pending.fileName)
+                  .catch((error) => toast({ title: t('mindmapImportFailed'), description: error instanceof Error ? error.message : t('mindmapImportFailed'), variant: 'destructive' }))
+                  .finally(() => setImporting(false));
+              }}>
+                <span className="truncate">{sheet.title}</span>
+                <span className="text-xs text-muted-foreground">{t('xmindSheetTopics', { count: sheet.topicCount })}</span>
+              </Button>
+            ))}
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setPendingSheets(null)}>{t('cancel')}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!linkNode} onOpenChange={(open) => !open && setLinkNode(null)}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{t('mindmapLinkedCases', { node: linkNode?.title || '' })}</DialogTitle></DialogHeader>
         <div className="space-y-2"><p className="text-sm font-medium">{t('mindmapLinkedTestCasesLabel')}</p>{linkedCases.length === 0 && <p className="text-sm text-muted-foreground">{t('mindmapNoLinkedTestCases')}</p>}

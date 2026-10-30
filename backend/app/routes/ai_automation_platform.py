@@ -525,6 +525,67 @@ def register_ai_automation_platform_routes(app) -> None:
         )
         return draft
 
+    @app.post("/ai-automation/script-drafts/{draft_id}/enqueue", response_model=schemas.AIAutomationTask)
+    def enqueue_ai_automation_script_draft(
+        draft_id: int = Path(..., ge=1),
+        db: Session = Depends(get_db),
+        current_user: schemas.User = Depends(get_current_active_user),
+    ):
+        """Queue an approved draft as a fixed script. Approval itself never does this."""
+        draft = db.query(models.AIAutomationScriptDraft).filter(models.AIAutomationScriptDraft.id == draft_id).first()
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Script draft not found")
+        if not rbac.has_permission(current_user, "execute", draft.project_id, db):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        if draft.status != "approved":
+            raise HTTPException(status_code=409, detail="Only an approved script draft can be queued")
+        if not isinstance(draft.script, list) or not draft.script:
+            raise HTTPException(status_code=422, detail="Approved draft has no script steps")
+        source = _get_task(db, draft.source_task_id)
+        existing = [
+            task for task in db.query(models.AIAutomationTask).filter(
+                models.AIAutomationTask.project_id == draft.project_id,
+                models.AIAutomationTask.status.in_(tuple(OPEN_STATUSES)),
+            ).all()
+            if isinstance(task.config, dict) and task.config.get("script_draft_id") == draft.id
+        ]
+        if existing:
+            return existing[0]
+        source_config = source.config if isinstance(source.config, dict) else {}
+        config = {
+            "script": draft.script,
+            "script_draft_id": draft.id,
+            "script_draft_revision": draft.revision,
+        }
+        for key in ("allowlist", "credential_refs", "auth", "account_ref"):
+            if key in source_config:
+                config[key] = source_config[key]
+        enforce_task_policy(config, _environment_type(db, source.environment_id))
+        task = models.AIAutomationTask(
+            project_id=source.project_id,
+            test_case_id=source.test_case_id,
+            test_run_id=source.test_run_id,
+            environment_id=source.environment_id,
+            requested_by=current_user.id,
+            runner_type=source.runner_type,
+            execution_mode="script",
+            goal=f"Run approved script draft revision {draft.revision}",
+            max_steps=source.max_steps,
+            timeout_seconds=source.timeout_seconds,
+            token_budget=source.token_budget,
+            config=config,
+            status="queued",
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        _audit_task_action(
+            db, user_id=current_user.id, action="create", task_id=task.id, project_id=task.project_id,
+            description=f"Approved script draft {draft.id} queued as a fixed script",
+            metadata={"actor_type": "user", "draft_id": draft.id, "revision": draft.revision, "execution_mode": "script"},
+        )
+        return task
+
     @app.post("/ai-automation/tasks/{task_id}/retry", response_model=schemas.AIAutomationTask)
     def retry_ai_automation_task(
         task_id: int = Path(..., ge=1),
