@@ -9,6 +9,7 @@ tests/backend/unit/test_ai_service.py.
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -113,6 +114,32 @@ def test_usage_tracking_records_provider_and_model():
     usage = ai_manager.get_ai_usage(db)
     by_op = {row["operation"]: row for row in usage["limits"]["by_operation"]}
     assert by_op["doc_change_impact"]["total_tokens"] == 75
+
+
+def test_provider_model_and_encrypted_key_roundtrip():
+    db = _mem_db()
+    secret = "provider-secret-that-must-not-be-stored-in-plain-text"
+    saved = ai_manager.update_ai_manager_settings(db, ai_manager.AIManagerSettingsPayload(
+        active_provider="openai",
+        providers=[ai_manager.AIProviderConfigPayload(
+            provider="openai",
+            enabled=True,
+            api_key=secret,
+            model="gpt-test-model",
+            base_url="https://api.openai.com/v1",
+        )],
+    ))
+
+    stored = db.query(models.SystemSettings).filter(
+        models.SystemSettings.key == ai_manager.AI_MANAGER_CONFIG_KEY,
+    ).one()
+    raw_config = json.loads(stored.value)
+    assert secret not in stored.value
+    assert raw_config["providers"]["openai"]["api_key"]
+    provider = next(item for item in saved["providers"] if item["provider"] == "openai")
+    assert provider["model"] == "gpt-test-model"
+    assert provider["token_configured"] is True
+    assert "api_key" not in provider
 
 
 # ---------------------------------------------------------------------------
