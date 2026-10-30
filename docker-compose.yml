@@ -132,6 +132,7 @@ services:
       context: .
       dockerfile: runners/mobile/Dockerfile
     profiles: ["mobile-runner"]
+    read_only: true
     environment:
       - TESTMONA_BACKEND_URL=${TESTMONA_BACKEND_URL:-http://backend:8000}
       - TESTMONA_RUNNER_TOKEN=${TESTMONA_MOBILE_RUNNER_TOKEN:-}

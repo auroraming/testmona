@@ -1,6 +1,6 @@
 import { RunnerProtocol, delay } from '../../common/protocol.js';
 import { AppiumClient } from './appium.js';
-import { executeMobileScript } from './executor.js';
+import { executeMobileScript, mobilePreflightBlock } from './executor.js';
 import { publishDeviceInventory } from './inventory.js';
 
 const protocol = new RunnerProtocol(process.env.TESTMONA_BACKEND_URL, process.env.TESTMONA_RUNNER_TOKEN);
@@ -13,8 +13,8 @@ async function run(lease) {
     });
   }
   const appiumUrl = lease.context?.environment?.config?.appium_url || process.env.APPIUM_URL;
-  if (!appiumUrl) return protocol.report(lease, 'blocked', null, 'No Appium endpoint is configured');
-  if (lease.task.execution_mode !== 'script') return protocol.report(lease, 'blocked', null, 'Mobile AI mode requires mobile-mcp integration');
+  const blocked = mobilePreflightBlock(appiumUrl, lease.task.execution_mode);
+  if (blocked) return protocol.report(lease, 'blocked', null, blocked);
   const driver = new AppiumClient(appiumUrl);
   let cancelled = false;
   try {

@@ -1,5 +1,11 @@
 const ACTIONS = new Set(['tap', 'type', 'swipe', 'assert_text', 'assert_visible', 'screenshot']);
 
+export function mobilePreflightBlock(appiumUrl, executionMode) {
+  if (!appiumUrl) return 'No Appium endpoint is configured';
+  if (executionMode !== 'script') return 'Mobile AI mode requires mobile-mcp integration';
+  return null;
+}
+
 export async function executeMobileScript(driver, script, emitEvidence, shouldCancel = () => false) {
   if (!Array.isArray(script) || script.length === 0) throw new Error('config.script must contain Mobile steps');
   const assertions = [];

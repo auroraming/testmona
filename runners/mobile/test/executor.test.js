@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executeMobileScript } from '../src/executor.js';
+import { executeMobileScript, mobilePreflightBlock } from '../src/executor.js';
 
 const driver = {
   find: async () => 'element-1', click: async () => {}, type: async () => {},
@@ -22,4 +22,10 @@ test('never passes action-only mobile scripts', async () => {
   const result = await executeMobileScript(driver, [{ action: 'swipe', start_x: 1, start_y: 2, end_x: 3, end_y: 4 }], async () => {});
   assert.equal(result.passed, false);
   assert.match(result.error, /explicit assertion/);
+});
+
+test('explains missing Appium and unavailable mobile AI integration', () => {
+  assert.equal(mobilePreflightBlock('', 'script'), 'No Appium endpoint is configured');
+  assert.equal(mobilePreflightBlock('http://appium:4723', 'ai'), 'Mobile AI mode requires mobile-mcp integration');
+  assert.equal(mobilePreflightBlock('http://appium:4723', 'script'), null);
 });

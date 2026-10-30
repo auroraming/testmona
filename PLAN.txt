@@ -62,7 +62,7 @@ AI 自动化交付阶段：
   - [ ] Worker 注册 Android/iOS 真机或模拟器，提供设备能力、占用锁、心跳、授权和离线状态。
     - [x] Appium Worker 基础：独立容器连接外部 Appium 2/设备池，启动前探活并通过 W3C Session 获取设备占用；支持租约心跳和取消，无端点、离线或无设备时明确回报 blocked。
     - [x] 增加服务端设备清单、能力注册、显式设备锁和离线回收。mobile-mcp 仅提供工具白名单合约，隐藏安装/卸载类工具；没有连接真机，不宣称 Android/iOS 端到端通过。iOS 仍依赖 macOS/Xcode。
-  - [ ] 无可用设备时给出明确提示；iOS 能力明确依赖 macOS/Xcode，不承诺任意 Docker 主机开箱即用。
+  - [x] 无可用设备时给出明确提示；iOS 能力明确依赖 macOS/Xcode，不承诺任意 Docker 主机开箱即用。
   - [ ] 验收：在至少一台 Android 和一台 iOS 可用设备上执行用例并回传截图、步骤和错误；无法提供某类设备时记录环境限制而非虚假通过。
   - [x] 固定脚本基础支持 tap、type、swipe、截图触发、文本与可见性断言；没有显式断言时禁止通过。
 - [ ] AI-V1.3：API Agent PoC + 原生 HTTP Runner + 报告。
@@ -131,6 +131,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：完成 Mobile Runner 当前环境边界验收。独立 Node 22 Alpine 镜像构建成功并以 `node` 用户运行，Compose 固化只读根、`cap_drop: ALL`、`no-new-privileges` 和资源限制；无 Appium 端点与尚未接入 mobile-mcp 的 AI 模式返回稳定 blocked 原因并有回归测试。当前无 Android/iOS 设备，真机截图和步骤回传保持未勾。
 - 2026-10-30：完成 API Runner Docker/真实 HTTP 烟测。独立 Node 22 Alpine 镜像在 `node` 用户、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、0.5 CPU/256 MiB 限制下，对容器内临时 HTTP 服务完成请求、状态码、Header、JSON Path 和响应 Schema 共 4 个断言，产生 5 条证据并返回 `testmona.api_result.v1`。Compose 固化只读根。API MCP 对照与关联真实测试轮次仍未勾。
 - 2026-10-30：完成 Web Runner Docker/Chromium 实机烟测。锁定 Playwright 1.64.1 / Chromium 1248 的镜像成功构建；在 `pwuser`、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、1 CPU/1 GiB 限制下启动真实 Chromium，文本与可见性 2 个断言及截图证据通过。Compose 固化只读根与限额 tmpfs。完整登录态任务经后端入队、租约、制品回传的端到端仍待专用环境验收。
 - 2026-10-30：OpenAPI/Swagger 固定脚本生成补齐请求数据。必填 path/query 参数会使用规范中的安全示例或基础类型值，`application/json` 请求体与 Swagger 2 body 参数只生成必填的非敏感字段；Header/Cookie 和敏感命名字段仍由凭据引用处理，不复制进脚本。相关 OpenAPI/自动化平台 33 项测试通过。未增加随机数据生成器或可选字段策略。
