@@ -66,6 +66,7 @@ def test_unsafe_routes_require_auth_dependency_or_public_allowlist():
         "get_current_user",
         "get_current_active_user",
         "get_current_user_check_password_change",
+        "require_automation_runner",
     }
     public_unsafe_routes = {
         ("POST", "/system/setup"),

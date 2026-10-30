@@ -526,6 +526,8 @@ class AIAutomationTask(Base):
     test_case_id = Column(Integer, ForeignKey("test_cases.id", ondelete="SET NULL"), nullable=True, index=True)
     test_run_id = Column(Integer, ForeignKey("test_runs.id", ondelete="SET NULL"), nullable=True, index=True)
     environment_id = Column(Integer, ForeignKey("execution_environments.id", ondelete="SET NULL"), nullable=True)
+    batch_id = Column(Integer, ForeignKey("ai_automation_batches.id", ondelete="SET NULL"), nullable=True, index=True)
+    retry_of_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     requested_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     runner_type = Column(String(20), nullable=False)  # web | mobile | api
     execution_mode = Column(String(20), nullable=False, default="ai")  # ai | script
@@ -535,6 +537,7 @@ class AIAutomationTask(Base):
     timeout_seconds = Column(Integer, nullable=False, default=900)
     token_budget = Column(Integer, nullable=True)
     input_tokens = Column(Integer, nullable=False, default=0)
+    cached_tokens = Column(Integer, nullable=False, default=0)
     output_tokens = Column(Integer, nullable=False, default=0)
     runner_id = Column(Integer, ForeignKey("ai_automation_runners.id", ondelete="SET NULL"), nullable=True, index=True)
     lease_token_hash = Column(String(64), nullable=True)
@@ -603,3 +606,166 @@ class AIAutomationEvidence(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     task = relationship("AIAutomationTask")
+
+
+class AIAutomationBatch(Base):
+    """Idempotent batch of fixed-script tasks. Creating a batch only queues work."""
+
+    __tablename__ = "ai_automation_batches"
+    __table_args__ = (
+        UniqueConstraint("project_id", "idempotency_key", name="uq_ai_automation_batch_idempotency"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key = Column(String(120), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    runner_type = Column(String(20), nullable=False)
+    execution_mode = Column(String(20), nullable=False, default="script")
+    environment_id = Column(Integer, ForeignKey("execution_environments.id", ondelete="SET NULL"), nullable=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    allowlist = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    project = relationship("Project")
+    requester = relationship("User", foreign_keys=[requested_by])
+
+
+class AIAutomationCredential(Base):
+    """Encrypted project credential. Callers store a name; plaintext never leaves the resolve path."""
+
+    __tablename__ = "ai_automation_credentials"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_ai_automation_credential_project_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    ciphertext = Column(Text, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    project = relationship("Project")
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class AIAutomationDevice(Base):
+    """Server-side mobile device inventory. A lock is explicit and expires with the worker heartbeat."""
+
+    __tablename__ = "ai_automation_devices"
+    __table_args__ = (
+        UniqueConstraint("project_id", "external_id", name="uq_ai_automation_device_project_external"),
+        Index("ix_ai_automation_devices_project_status", "project_id", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    runner_id = Column(Integer, ForeignKey("ai_automation_runners.id", ondelete="SET NULL"), nullable=True, index=True)
+    external_id = Column(String(120), nullable=False)
+    platform = Column(String(20), nullable=False)
+    name = Column(String(120), nullable=False)
+    capabilities = Column(JSON, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default="offline")
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    lock_task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="SET NULL"), nullable=True)
+    lock_runner_id = Column(Integer, ForeignKey("ai_automation_runners.id", ondelete="SET NULL"), nullable=True)
+    lock_expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    project = relationship("Project")
+    runner = relationship("AIAutomationRunner", foreign_keys=[runner_id])
+
+
+class AIAutomationScriptDraft(Base):
+    """Human-reviewed script snapshot. A draft is not an execution record."""
+
+    __tablename__ = "ai_automation_script_drafts"
+    __table_args__ = (
+        UniqueConstraint("source_task_id", "revision", name="uq_ai_automation_script_draft_revision"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    environment_id = Column(Integer, ForeignKey("execution_environments.id", ondelete="SET NULL"), nullable=True)
+    revision = Column(Integer, nullable=False)
+    source = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default="draft")
+    script = Column(JSON, nullable=False)
+    note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    project = relationship("Project")
+    source_task = relationship("AIAutomationTask")
+
+
+class AIAutomationBudgetAlert(Base):
+    """Token-threshold alert. Cost stays empty until a provider price is actually known."""
+
+    __tablename__ = "ai_automation_budget_alerts"
+    __table_args__ = (
+        UniqueConstraint("task_id", "level", name="uq_ai_automation_budget_alert_level"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    level = Column(String(20), nullable=False)
+    threshold_ratio = Column(String(8), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    token_budget = Column(Integer, nullable=False)
+    estimated_cost_micros = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask")
+
+
+class AIAutomationTokenLedger(Base):
+    """Immutable input, cache, and output token record. Cost stays empty without a provider price."""
+
+    __tablename__ = "ai_automation_token_ledger"
+    __table_args__ = (
+        UniqueConstraint("task_id", "entry_type", name="uq_ai_automation_token_ledger_entry"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    entry_type = Column(String(30), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    cached_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    estimated_cost_micros = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask", foreign_keys="AIAutomationTokenLedger.task_id")
+
+
+class AIAutomationFailureSuggestion(Base):
+    """Human-confirmed failure note. It is not a defect and has no defect link."""
+
+    __tablename__ = "ai_automation_failure_suggestions"
+    __table_args__ = (
+        UniqueConstraint("task_id", name="uq_ai_automation_failure_suggestion_task"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("ai_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="suggested")
+    category = Column(String(40), nullable=False)
+    summary = Column(Text, nullable=False)
+    signals = Column(JSON, nullable=False, default=list)
+    content_hash = Column(String(64), nullable=False)
+    confirmed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    task = relationship("AIAutomationTask", foreign_keys="AIAutomationFailureSuggestion.task_id")

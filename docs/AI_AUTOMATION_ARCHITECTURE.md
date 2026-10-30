@@ -127,9 +127,12 @@ The optional `api-runner` Compose profile uses the same lease, heartbeat,
 evidence, and report protocol. Fixed scripts issue requests only to relative
 paths under the configured environment origin and record network observations
 plus independent status, JSON-path, and header assertions. A successful HTTP
-round trip never passes a task without assertions. Credential-reference
-injection, retries, OpenAPI script materialization, and the API MCP comparison
-remain open.
+round trip never passes a task without assertions. Credential references are
+encrypted at rest and resolved only for the active lease; evidence and audit
+records store the reference name. Transient statuses retry with capped
+backoff, while 401 and 403 do not. OpenAPI documents can be turned into this
+script shape. Native runner output and an API MCP observation both normalize
+to `testmona.api_result.v1`. A live API MCP server has not been compared.
 
 ## Mobile Runner baseline
 
@@ -139,7 +142,9 @@ creates one exclusive session before executing tap, type, swipe, screenshot,
 text-assertion, or visibility-assertion steps. Missing Appium or unavailable
 devices produce a blocked task rather than a false pass. Android emulators and
 iOS/macOS/Xcode remain deployment responsibilities of the device host; a
-server-side device catalog/lock and mobile-mcp discovery are still open.
+server-side device catalog now records capabilities, explicit locks, and
+offline reclaim. mobile-mcp discovery exposes an allowlist contract only.
+Android and iOS end-to-end runs still require real devices and are not claimed.
 
 ## Artifact boundary
 
@@ -150,3 +155,31 @@ may download the file only when they can read the project and an immutable
 evidence row on that task references it. Web scripts now upload screenshots and
 Playwright traces; Mobile scripts upload screenshots without embedding base64
 data in evidence payloads.
+
+## Platform controls added after the runner baseline
+
+Fixed Web scripts also emit sanitized network evidence: method, redacted URL,
+status, and resource type. Bodies, cookies, and authorization headers are not
+stored. Sequence numbers at 700000 and above keep network rows from colliding
+with step and trace evidence. Batch creation is idempotent per project key.
+CI templates interpolate `TESTMONA_API_TOKEN` from the runner environment and
+do not embed a secret. The API archives a runner `passed` report as `failed`
+unless explicit assertion records passed. An expired lease at the default
+attempt limit marks the same task `timed_out` instead of starting another
+execution record. Token alerts fire at 80% and at the budget; estimated cost
+stays null until a provider price exists. Script drafts record source,
+revision, environment, and approver, and approval does not enqueue a run.
+Production environment types and payment-like hosts stay denied. Docker
+end-to-end browser, device, and live MCP acceptance are still open.
+
+Failure suggestions are derived from assertion, network, log, and screenshot
+references. Confirming one records an audit entry and does not create a defect.
+Exploration evidence can be saved as another script draft, and rollback copies
+an older revision into a new draft without executing it. Terminal reports append
+one token ledger row with input, provider-reported cached, and output counts.
+`estimated_cost_micros` stays null. A runner defaults to one active lease;
+`capabilities.max_concurrent` can raise that cap to 20. An expired cancellation
+lease is finalized as cancelled on the same task. OpenAPI preview accepts pasted
+text, resolves local JSON pointers with a depth and cycle limit, and can emit
+success-only, required-field, or constraint-boundary drafts. Remote references
+stay rejected.

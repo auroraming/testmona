@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -32,6 +33,8 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
   const [targetSuiteId, setTargetSuiteId] = useState(testSuiteId);
   const [targetSectionId, setTargetSectionId] = useState<number | undefined>(sectionId);
   const [loading, setLoading] = useState(false);
+  const [pastedText, setPastedText] = useState('');
+  const [strategy, setStrategy] = useState<'success_only' | 'success_and_required' | 'constraints'>('success_and_required');
 
   const sectionOptions = useMemo(() => {
     const result: Array<{ id: number; label: string }> = [];
@@ -60,6 +63,13 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
     setTargetSuiteId(testSuiteId);
     setTargetSectionId(sectionId);
     if (fileInput.current) fileInput.current.value = '';
+    setPastedText('');
+    setStrategy('success_and_required');
+  };
+
+  const applyPreview = (result: OpenAPIPreview) => {
+    setPreview(result);
+    setSelected(new Set(result.drafts.map((_, index) => index)));
   };
 
   const handleFile = async (file?: File) => {
@@ -70,9 +80,21 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
     }
     setLoading(true);
     try {
-      const result = await importExportAPI.previewOpenAPI(projectId, file);
-      setPreview(result);
-      setSelected(new Set(result.drafts.map((_, index) => index)));
+      const result = await importExportAPI.previewOpenAPI(projectId, file, strategy);
+      applyPreview(result);
+    } catch (error) {
+      toast({ title: t('openapiPreviewFailed'), description: getApiErrorMessage(error, t('openapiPreviewFailed')), variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const previewText = async () => {
+    const text = pastedText.trim();
+    if (!text) return;
+    setLoading(true);
+    try {
+      applyPreview(await importExportAPI.previewOpenAPIText(projectId, text, strategy));
     } catch (error) {
       toast({ title: t('openapiPreviewFailed'), description: getApiErrorMessage(error, t('openapiPreviewFailed')), variant: 'destructive' });
     } finally {
@@ -127,6 +149,26 @@ export function OpenAPIImportDialog({ open, onOpenChange, projectId, testSuiteId
             <Button className="mt-4" onClick={() => fileInput.current?.click()} disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('chooseOpenAPIFile')}
             </Button>
+            <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
+              <div className="space-y-1">
+                <Label>{t('openapiStrategy')}</Label>
+                <Select value={strategy} onValueChange={(value: 'success_only' | 'success_and_required' | 'constraints') => setStrategy(value)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="success_only">{t('openapiStrategySuccess')}</SelectItem>
+                    <SelectItem value="success_and_required">{t('openapiStrategyRequired')}</SelectItem>
+                    <SelectItem value="constraints">{t('openapiStrategyConstraints')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="openapi-paste">{t('openapiPasteLabel')}</Label>
+                <Textarea id="openapi-paste" value={pastedText} onChange={(event) => setPastedText(event.target.value)} placeholder={t('openapiPastePlaceholder')} rows={6} />
+              </div>
+              <Button variant="secondary" onClick={() => void previewText()} disabled={loading || !pastedText.trim()}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('openapiPreviewText')}
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

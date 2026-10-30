@@ -20,8 +20,10 @@ from .base import router
 
 MAX_OPENAPI_BYTES = 2 * 1024 * 1024
 MAX_OPERATIONS = 500
+MAX_REF_DEPTH = 8
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
 SENSITIVE_NAMES = {"authorization", "api_key", "apikey", "token", "secret", "password"}
+OPENAPI_STRATEGIES = {"success_only", "success_and_required", "constraints"}
 
 
 class OpenAPIDraft(BaseModel):
@@ -71,7 +73,99 @@ def _safe_example(parameter: dict[str, Any]) -> Any:
     return f"<{parameter.get('name') or 'value'}>"
 
 
-def _operation_drafts(path: str, method: str, operation: dict[str, Any], inherited_parameters: list[dict]) -> list[OpenAPIDraft]:
+def _local_pointer(document: dict[str, Any], ref: str) -> Any:
+    if not ref.startswith("#/"):
+        raise HTTPException(status_code=400, detail="Only local JSON pointers are supported")
+    node: Any = document
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            raise HTTPException(status_code=400, detail=f"Unresolved local $ref: {ref}")
+    return node
+
+
+def _resolve_local_refs(node: Any, document: dict[str, Any], depth: int = 0, stack: tuple[str, ...] = ()) -> Any:
+    if depth > MAX_REF_DEPTH:
+        raise HTTPException(status_code=400, detail="OpenAPI local $ref depth exceeded")
+    if isinstance(node, list):
+        return [_resolve_local_refs(item, document, depth, stack) for item in node]
+    if not isinstance(node, dict):
+        return node
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        if ref.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Remote $ref values are not allowed")
+        if ref in stack:
+            raise HTTPException(status_code=400, detail="Cyclic local $ref")
+        resolved = _resolve_local_refs(_local_pointer(document, ref), document, depth + 1, stack + (ref,))
+        extras = {
+            key: _resolve_local_refs(value, document, depth + 1, stack)
+            for key, value in node.items() if key != "$ref"
+        }
+        if isinstance(resolved, dict):
+            return {**resolved, **extras}
+        return resolved
+    return {key: _resolve_local_refs(value, document, depth, stack) for key, value in node.items()}
+
+
+def _normalize_strategy(strategy: str | None) -> str:
+    normalized = (strategy or "success_and_required").strip().lower()
+    if normalized not in OPENAPI_STRATEGIES:
+        raise HTTPException(status_code=422, detail="strategy must be success_only, success_and_required, or constraints")
+    return normalized
+
+
+def _boundary_drafts(path: str, method: str, base_title: str, parameters: list[dict], common: dict) -> list[OpenAPIDraft]:
+    drafts = []
+    for parameter in parameters[:20]:
+        name = str(parameter.get("name") or "")
+        if any(secret in name.lower() for secret in SENSITIVE_NAMES):
+            continue
+        schema = parameter.get("schema") if isinstance(parameter.get("schema"), dict) else {}
+        if not schema:
+            schema = {
+                key: parameter[key]
+                for key in ("minimum", "maximum", "minLength", "maxLength", "enum")
+                if key in parameter
+            }
+        if "minimum" in schema:
+            drafts.append(OpenAPIDraft(
+                operation_key=f"{method.lower()}:{path}:below-minimum:{name}",
+                title=f"{base_title} — {name} below minimum",
+                steps=[{
+                    "step_number": 1,
+                    "action": f"Send {method.upper()} {path} with {name} less than the declared minimum.",
+                    "expected_result": "The API rejects the value using a declared constraint response.",
+                    "step_type": "verification",
+                }],
+                **common,
+            ))
+        if isinstance(schema.get("maxLength"), int):
+            drafts.append(OpenAPIDraft(
+                operation_key=f"{method.lower()}:{path}:over-max-length:{name}",
+                title=f"{base_title} — {name} over maxLength",
+                steps=[{
+                    "step_number": 1,
+                    "action": f"Send {method.upper()} {path} with {name} longer than {schema['maxLength']} characters.",
+                    "expected_result": "The API rejects the value using a declared constraint response.",
+                    "step_type": "verification",
+                }],
+                **common,
+            ))
+    return drafts
+
+
+def _operation_drafts(
+    path: str,
+    method: str,
+    operation: dict[str, Any],
+    inherited_parameters: list[dict],
+    strategy: str,
+) -> list[OpenAPIDraft]:
     reference = f"{method.upper()} {path}"
     base_title = operation.get("summary") or operation.get("operationId") or reference
     parameters = [item for item in inherited_parameters + (operation.get("parameters") or []) if isinstance(item, dict)]
@@ -98,6 +192,8 @@ def _operation_drafts(path: str, method: str, operation: dict[str, Any], inherit
         ],
         **common,
     )]
+    if strategy == "success_only":
+        return drafts
     for parameter in required[:20]:
         name = str(parameter.get("name") or "required field")
         drafts.append(OpenAPIDraft(
@@ -109,10 +205,13 @@ def _operation_drafts(path: str, method: str, operation: dict[str, Any], inherit
             ],
             **common,
         ))
+    if strategy == "constraints":
+        drafts.extend(_boundary_drafts(path, method, str(base_title), parameters, common))
     return drafts
 
 
-def parse_openapi(contents: bytes) -> dict[str, Any]:
+def parse_openapi(contents: bytes, strategy: str = "success_and_required") -> dict[str, Any]:
+    selected_strategy = _normalize_strategy(strategy)
     if len(contents) > MAX_OPENAPI_BYTES:
         raise HTTPException(status_code=413, detail="OpenAPI file exceeds the 2 MB limit")
     try:
@@ -137,6 +236,7 @@ def parse_openapi(contents: bytes) -> dict[str, Any]:
         )
     if _contains_remote_ref(document):
         raise HTTPException(status_code=400, detail="Remote $ref values are not allowed")
+    document = _resolve_local_refs(document, document)
     paths = document.get("paths")
     if not isinstance(paths, dict):
         raise HTTPException(status_code=400, detail="OpenAPI document has no paths object")
@@ -159,7 +259,7 @@ def parse_openapi(contents: bytes) -> dict[str, Any]:
                 "summary": operation.get("summary"),
                 "tags": operation.get("tags") or [],
             })
-            drafts.extend(_operation_drafts(path, method, operation, inherited))
+            drafts.extend(_operation_drafts(path, method, operation, inherited, selected_strategy))
             if len(operations) > MAX_OPERATIONS:
                 raise HTTPException(status_code=400, detail=f"OpenAPI documents are limited to {MAX_OPERATIONS} operations")
     return {
@@ -168,15 +268,23 @@ def parse_openapi(contents: bytes) -> dict[str, Any]:
         "version": version,
         "fingerprint": hashlib.sha256(contents).hexdigest(),
         "operations": operations,
+        "strategy": selected_strategy,
         "drafts": [draft.model_dump() for draft in drafts[:1000]],
         "warnings": [] if operations else ["No HTTP operations were found"],
     }
+
+
+class OpenAPITextPreview(BaseModel):
+    project_id: int = Field(gt=0)
+    text: str = Field(min_length=2, max_length=MAX_OPENAPI_BYTES)
+    strategy: str = "success_and_required"
 
 
 @router.post("/openapi/preview")
 async def preview_openapi(
     project_id: int = Form(...),
     file: UploadFile = File(...),
+    strategy: str = Form("success_and_required"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -186,7 +294,18 @@ async def preview_openapi(
     if not filename.endswith((".json", ".yaml", ".yml")):
         raise HTTPException(status_code=400, detail="OpenAPI file must be JSON or YAML")
     contents = await file.read(MAX_OPENAPI_BYTES + 1)
-    return parse_openapi(contents)
+    return parse_openapi(contents, strategy)
+
+
+@router.post("/openapi/preview-text")
+def preview_openapi_text(
+    payload: OpenAPITextPreview,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    if not rbac.has_permission(current_user, "write", payload.project_id, db):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return parse_openapi(payload.text.encode("utf-8"), payload.strategy)
 
 
 @router.post("/openapi/commit")

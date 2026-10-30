@@ -31,6 +31,34 @@ test('blocks requests that escape the configured origin', async () => {
   assert.match(result.error, /configured base URL origin/);
 });
 
+test('injects a bearer credential without writing it to evidence and does not retry 401', async () => {
+  const evidence = [];
+  let calls = 0;
+  let seenAuth = null;
+  const secret = 'runner-only-secret-value';
+  const result = await executeApiScript({
+    baseUrl: 'https://api.example.test/',
+    credentials: { 'api-token': secret },
+    auth: { type: 'bearer', credential_ref: 'api-token' },
+    script: [
+      { action: 'request', path: '/private', retries: 2 },
+      { action: 'assert_status', expected: 200 },
+    ],
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      seenAuth = options.headers.authorization;
+      return new Response(JSON.stringify({ token: secret }), { status: 401 });
+    },
+    emitEvidence: async (item) => evidence.push(item),
+  });
+  assert.equal(seenAuth, `Bearer ${secret}`);
+  assert.equal(calls, 1);
+  assert.equal(result.passed, false);
+  assert.equal(result.schema, 'testmona.api_result.v1');
+  assert.equal(result.source, 'native_http');
+  assert.doesNotMatch(JSON.stringify(evidence), new RegExp(secret));
+});
+
 test('substitutes variables and retries selected transient statuses', async () => {
   let calls = 0;
   const result = await executeApiScript({

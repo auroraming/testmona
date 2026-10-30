@@ -270,6 +270,7 @@ class AICompletionResult(BaseModel):
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
     total_tokens: int = 0
 
 
@@ -962,9 +963,24 @@ def _get_private_config(
     return provider_config
 
 
-def _usage_from_openai_payload(data: Dict[str, Any]) -> tuple[int, int]:
+def _cached_tokens_from_usage(usage: Dict[str, Any]) -> int:
+    """Read a provider-reported cache count. Missing fields stay zero; nothing is estimated."""
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and details.get("cached_tokens") is not None:
+        return max(0, int(details.get("cached_tokens") or 0))
+    for key in ("cached_tokens", "cache_read_input_tokens"):
+        if usage.get(key) is not None:
+            return max(0, int(usage.get(key) or 0))
+    return 0
+
+
+def _usage_from_openai_payload(data: Dict[str, Any]) -> tuple[int, int, int]:
     usage = data.get("usage") or {}
-    return int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+    return (
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+        _cached_tokens_from_usage(usage),
+    )
 
 
 def _extract_provider_detail(data: Any, fallback: str) -> str:
@@ -1080,6 +1096,7 @@ async def generate_ai_completion(
         api_key = provider_config["api_key_plain"]
         prompt_tokens = 0
         completion_tokens = 0
+        cached_tokens = 0
         # Saved proxy applies everywhere; either test-override key pins the
         # connection test to the unsaved form state. Disabled/no URL = direct.
         proxy = _normalize_proxy(config.get("proxy"))
@@ -1125,7 +1142,7 @@ async def generate_ai_completion(
                         raise HTTPException(status_code=502, detail="AI provider returned an invalid response") from exc
                     choices = data.get("choices") or []
                     content = (((choices[0] if choices else {}).get("message") or {}).get("content") or "").strip()
-                    prompt_tokens, completion_tokens = _usage_from_openai_payload(data)
+                    prompt_tokens, completion_tokens, cached_tokens = _usage_from_openai_payload(data)
                 elif provider == "anthropic":
                     body = {
                         "model": model,
@@ -1158,6 +1175,7 @@ async def generate_ai_completion(
                     usage = data.get("usage") or {}
                     prompt_tokens = int(usage.get("input_tokens") or 0)
                     completion_tokens = int(usage.get("output_tokens") or 0)
+                    cached_tokens = _cached_tokens_from_usage(usage)
                 else:
                     raise HTTPException(status_code=400, detail="Unsupported AI provider")
 
@@ -1178,6 +1196,7 @@ async def generate_ai_completion(
                 content=content,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
         except httpx.TimeoutException as exc:

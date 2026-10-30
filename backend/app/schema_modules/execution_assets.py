@@ -916,8 +916,11 @@ class AIAutomationTask(BaseModel):
     timeout_seconds: int
     token_budget: Optional[int] = None
     input_tokens: int
+    cached_tokens: int = 0
     output_tokens: int
     runner_id: Optional[int] = None
+    batch_id: Optional[int] = None
+    retry_of_id: Optional[int] = None
     lease_expires_at: Optional[datetime] = None
     attempt_count: int
     config: Dict[str, Any]
@@ -1004,6 +1007,7 @@ class AIAutomationTaskReport(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = Field(None, max_length=4000)
     input_tokens: int = Field(0, ge=0)
+    cached_tokens: int = Field(0, ge=0)
     output_tokens: int = Field(0, ge=0)
 
     @field_validator("status")
@@ -1042,6 +1046,12 @@ class AIAutomationEvidenceCreate(BaseModel):
     @field_validator("payload")
     @classmethod
     def validate_payload(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        from ..services.automation_redaction import scrub_payload
+
+        try:
+            value = scrub_payload(value)
+        except ValueError:
+            raise
         if _contains_inline_secret(value):
             raise ValueError("evidence cannot contain inline secrets")
         if len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))) > 65536:
@@ -1078,3 +1088,230 @@ class AIAutomationEvidence(BaseModel):
 class AIAutomationEvidenceBatch(BaseModel):
     lease_token: str = Field(..., min_length=20, max_length=200)
     items: List[AIAutomationEvidenceCreate] = Field(..., min_length=1, max_length=100)
+
+
+class AIAutomationCredentialCreate(BaseModel):
+    project_id: int = Field(..., ge=1)
+    name: str = Field(..., min_length=1, max_length=80)
+    value: str = Field(..., min_length=8, max_length=4096)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,78}", normalized):
+            raise ValueError("credential name must be a reference, not a secret")
+        return normalized
+
+
+class AIAutomationCredential(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    created_by: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationCredentialResolve(BaseModel):
+    lease_token: str = Field(..., min_length=20, max_length=200)
+    names: List[str] = Field(..., min_length=1, max_length=10)
+
+
+class AIAutomationBatchItem(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=4000)
+    test_case_id: Optional[int] = Field(None, ge=1)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("config")
+    @classmethod
+    def reject_inline_secrets(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if _contains_inline_secret(value):
+            raise ValueError("config must use credential references and cannot contain inline secrets")
+        return value
+
+
+class AIAutomationBatchCreate(BaseModel):
+    project_id: int = Field(..., ge=1)
+    runner_type: str
+    execution_mode: str = "script"
+    idempotency_key: str = Field(..., min_length=8, max_length=120)
+    environment_id: Optional[int] = Field(None, ge=1)
+    allowlist: Dict[str, Any] = Field(default_factory=dict)
+    items: List[AIAutomationBatchItem] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("runner_type")
+    @classmethod
+    def validate_runner_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_RUNNER_TYPES:
+            raise ValueError("runner_type must be web, mobile, or api")
+        return normalized
+
+    @field_validator("execution_mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in AI_AUTOMATION_EXECUTION_MODES:
+            raise ValueError("execution_mode must be ai or script")
+        return normalized
+
+
+class AIAutomationBatch(BaseModel):
+    id: int
+    project_id: int
+    runner_type: str
+    execution_mode: str
+    idempotency_key: str
+    environment_id: Optional[int] = None
+    task_ids: List[int]
+    status: str
+    created_at: datetime
+
+
+class AIAutomationDeviceReport(BaseModel):
+    external_id: str = Field(..., min_length=1, max_length=120)
+    platform: str = Field(..., min_length=1, max_length=20)
+    name: str = Field(..., min_length=1, max_length=120)
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("platform")
+    @classmethod
+    def validate_platform(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"android", "ios"}:
+            raise ValueError("platform must be android or ios")
+        return normalized
+
+    @field_validator("capabilities")
+    @classmethod
+    def reject_inline_secrets(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if _contains_inline_secret(value):
+            raise ValueError("device capabilities cannot contain inline secrets")
+        if len(json.dumps(value, ensure_ascii=False)) > 8192:
+            raise ValueError("device capabilities are too large")
+        return value
+
+
+class AIAutomationDeviceHeartbeat(BaseModel):
+    devices: List[AIAutomationDeviceReport] = Field(..., min_length=1, max_length=50)
+
+
+class AIAutomationDeviceLock(BaseModel):
+    lease_token: str = Field(..., min_length=20, max_length=200)
+    task_id: int = Field(..., ge=1)
+
+
+class AIAutomationDevice(BaseModel):
+    id: int
+    project_id: int
+    runner_id: Optional[int] = None
+    external_id: str
+    platform: str
+    name: str
+    capabilities: Dict[str, Any]
+    status: str
+    last_seen_at: Optional[datetime] = None
+    lock_task_id: Optional[int] = None
+    lock_expires_at: Optional[datetime] = None
+    deployment_note: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationScriptDraftCreate(BaseModel):
+    script: List[Dict[str, Any]] = Field(..., min_length=1, max_length=200)
+    source: str = Field(..., min_length=1, max_length=30)
+    note: Optional[str] = Field(None, max_length=2000)
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"exploration", "manual", "openapi"}:
+            raise ValueError("source must be exploration, manual, or openapi")
+        return normalized
+
+    @field_validator("script")
+    @classmethod
+    def reject_inline_secrets(cls, value: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if _contains_inline_secret(value):
+            raise ValueError("script drafts cannot contain inline secrets")
+        if len(json.dumps(value, ensure_ascii=False)) > 65536:
+            raise ValueError("script draft cannot exceed 64 KB")
+        return value
+
+
+class AIAutomationScriptDraft(BaseModel):
+    id: int
+    project_id: int
+    source_task_id: int
+    environment_id: Optional[int] = None
+    revision: int
+    source: str
+    status: str
+    script: Any
+    note: Optional[str] = None
+    created_by: int
+    approved_by: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationBudgetAlert(BaseModel):
+    id: int
+    task_id: int
+    project_id: int
+    level: str
+    threshold_ratio: str
+    input_tokens: int
+    output_tokens: int
+    token_budget: int
+    estimated_cost_micros: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationTokenLedger(BaseModel):
+    id: int
+    task_id: int
+    project_id: int
+    entry_type: str
+    input_tokens: int
+    cached_tokens: int
+    output_tokens: int
+    estimated_cost_micros: Optional[int] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationFailureSuggestion(BaseModel):
+    id: int
+    task_id: int
+    project_id: int
+    status: str
+    category: str
+    summary: str
+    signals: List[Dict[str, Any]]
+    content_hash: str
+    confirmed_by: Optional[int] = None
+    confirmed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIAutomationOpenAPIScripts(BaseModel):
+    project_id: int = Field(..., ge=1)
+    document: Dict[str, Any]
+    credential_ref: Optional[str] = Field(None, max_length=80)
+    allowlist: Dict[str, Any] = Field(default_factory=dict)
+    create_tasks: bool = False
+    idempotency_key: Optional[str] = Field(None, min_length=8, max_length=120)
+    environment_id: Optional[int] = Field(None, ge=1)
