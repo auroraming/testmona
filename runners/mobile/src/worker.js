@@ -1,11 +1,17 @@
 import { RunnerProtocol, delay } from '../../common/protocol.js';
 import { AppiumClient } from './appium.js';
 import { executeMobileScript } from './executor.js';
+import { publishDeviceInventory } from './inventory.js';
 
 const protocol = new RunnerProtocol(process.env.TESTMONA_BACKEND_URL, process.env.TESTMONA_RUNNER_TOKEN);
 const pollMs = Number(process.env.TESTMONA_RUNNER_POLL_MS || 3000);
 
 async function run(lease) {
+  if (Array.isArray(lease.task.config?.devices)) {
+    await publishDeviceInventory(protocol, lease.task.config.devices).catch((error) => {
+      console.error(error instanceof Error ? error.message : 'Device inventory sync failed');
+    });
+  }
   const appiumUrl = lease.context?.environment?.config?.appium_url || process.env.APPIUM_URL;
   if (!appiumUrl) return protocol.report(lease, 'blocked', null, 'No Appium endpoint is configured');
   if (lease.task.execution_mode !== 'script') return protocol.report(lease, 'blocked', null, 'Mobile AI mode requires mobile-mcp integration');

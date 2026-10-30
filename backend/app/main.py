@@ -101,6 +101,7 @@ from .routes.datasets import register_dataset_routes
 from .routes.ai_manager import register_ai_manager_routes
 from .routes.ai_generation import register_ai_generation_routes
 from .routes.ai_automation import register_ai_automation_routes
+from .routes.ai_automation_platform import register_ai_automation_platform_routes
 from .routes.project_ai_chat import register_project_ai_chat_routes
 from .routes.docs import register_docs_routes
 from .routes.advanced_search import register_advanced_search_routes
@@ -132,6 +133,7 @@ register_dataset_routes(app)
 register_ai_manager_routes(app)
 register_ai_generation_routes(app)
 register_ai_automation_routes(app)
+register_ai_automation_platform_routes(app)
 register_project_ai_chat_routes(app)
 register_docs_routes(app)
 register_advanced_search_routes(app)

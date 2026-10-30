@@ -19,6 +19,9 @@ from sqlalchemy.orm import Session
 from .. import models, rbac, schemas
 from ..auth import get_current_active_user
 from ..database import get_db
+from ..services.automation_budget import budget_levels
+from ..services.automation_policy import enforce_task_policy
+from ..services.automation_results import archived_result, archive_terminal_status
 
 
 TERMINAL_STATUSES = {"cancelled", "passed", "failed", "blocked", "timed_out"}
@@ -77,6 +80,43 @@ def _authenticate_runner(db: Session, token: str | None) -> models.AIAutomationR
     if runner is None or runner.status == "disabled":
         raise HTTPException(status_code=401, detail="Invalid runner token")
     return runner
+
+
+def require_automation_runner(
+    x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+    db: Session = Depends(get_db),
+) -> models.AIAutomationRunner:
+    """Authenticate an internal Runner request. This is not a user session."""
+    return _authenticate_runner(db, x_runner_token)
+
+
+def _max_attempts(task: models.AIAutomationTask) -> int:
+    raw = (task.config or {}).get("max_attempts", 1) if isinstance(task.config, dict) else 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 1
+    return min(5, max(1, value))
+
+
+def _record_budget_alerts(db: Session, task: models.AIAutomationTask) -> None:
+    for level, ratio in budget_levels(task.token_budget, task.input_tokens or 0, task.output_tokens or 0):
+        exists = db.query(models.AIAutomationBudgetAlert).filter(
+            models.AIAutomationBudgetAlert.task_id == task.id,
+            models.AIAutomationBudgetAlert.level == level,
+        ).first()
+        if exists is not None:
+            continue
+        db.add(models.AIAutomationBudgetAlert(
+            task_id=task.id,
+            project_id=task.project_id,
+            level=level,
+            threshold_ratio=ratio,
+            input_tokens=task.input_tokens or 0,
+            output_tokens=task.output_tokens or 0,
+            token_budget=task.token_budget,
+            estimated_cost_micros=None,
+        ))
 
 
 def _verify_lease(task: models.AIAutomationTask, runner: models.AIAutomationRunner, lease_token: str) -> None:
@@ -266,6 +306,13 @@ def register_ai_automation_routes(app) -> None:
         if not rbac.has_permission(current_user, "execute", payload.project_id, db):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         _validate_project_links(db, payload)
+        environment_type = None
+        if payload.environment_id is not None:
+            environment = db.query(models.ExecutionEnvironment).filter(
+                models.ExecutionEnvironment.id == payload.environment_id
+            ).first()
+            environment_type = environment.environment_type if environment is not None else None
+        enforce_task_policy(payload.config or {}, environment_type)
         task = models.AIAutomationTask(
             **payload.model_dump(),
             requested_by=current_user.id,
@@ -358,22 +405,34 @@ def register_ai_automation_routes(app) -> None:
     @app.post("/internal/ai-automation/claim", response_model=schemas.AIAutomationTaskLease | None)
     def claim_ai_automation_task(
         response: Response,
-        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
         db: Session = Depends(get_db),
+        runner: models.AIAutomationRunner = Depends(require_automation_runner),
     ):
-        runner = _authenticate_runner(db, x_runner_token)
         now = datetime.now(timezone.utc)
         runner.status = "online"
         runner.last_seen_at = now
-        task = db.query(models.AIAutomationTask).filter(
-            models.AIAutomationTask.project_id == runner.project_id,
-            models.AIAutomationTask.runner_type == runner.runner_type,
-            or_(
-                models.AIAutomationTask.status == "queued",
-                (models.AIAutomationTask.status == "running")
-                & (models.AIAutomationTask.lease_expires_at < now),
-            ),
-        ).order_by(models.AIAutomationTask.id).with_for_update(skip_locked=True).first()
+        task = None
+        for _ in range(20):
+            task = db.query(models.AIAutomationTask).filter(
+                models.AIAutomationTask.project_id == runner.project_id,
+                models.AIAutomationTask.runner_type == runner.runner_type,
+                or_(
+                    models.AIAutomationTask.status == "queued",
+                    (models.AIAutomationTask.status == "running")
+                    & (models.AIAutomationTask.lease_expires_at < now),
+                ),
+            ).order_by(models.AIAutomationTask.id).with_for_update(skip_locked=True).first()
+            if task is None:
+                break
+            if task.status == "running" and task.attempt_count >= _max_attempts(task):
+                task.status = "timed_out"
+                task.completed_at = now
+                task.error_message = "Runner lease expired and the retry budget was exhausted"
+                task.lease_token_hash = None
+                db.commit()
+                task = None
+                continue
+            break
         if task is None:
             db.commit()
             response.status_code = 204
@@ -392,10 +451,9 @@ def register_ai_automation_routes(app) -> None:
     @app.post("/internal/ai-automation/heartbeat", response_model=schemas.AIAutomationRunnerHeartbeatResult)
     def heartbeat_ai_automation_runner(
         payload: schemas.AIAutomationRunnerHeartbeat,
-        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
         db: Session = Depends(get_db),
+        runner: models.AIAutomationRunner = Depends(require_automation_runner),
     ):
-        runner = _authenticate_runner(db, x_runner_token)
         now = datetime.now(timezone.utc)
         runner.status = "online"
         runner.last_seen_at = now
@@ -421,24 +479,29 @@ def register_ai_automation_routes(app) -> None:
     def report_ai_automation_task(
         payload: schemas.AIAutomationTaskReport,
         task_id: int = Path(..., ge=1),
-        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
         db: Session = Depends(get_db),
+        runner: models.AIAutomationRunner = Depends(require_automation_runner),
     ):
-        runner = _authenticate_runner(db, x_runner_token)
         task = _get_task(db, task_id)
         _verify_lease(task, runner, payload.lease_token)
         if task.status in TERMINAL_STATUSES:
-            if task.status != payload.status:
+            prior_report = (task.result or {}).get("runner_reported_status", task.status)
+            if payload.status not in {task.status, prior_report}:
                 raise HTTPException(status_code=409, detail="Task already has a different terminal result")
             return task
         if task.status not in {"running", "cancel_requested"}:
             raise HTTPException(status_code=409, detail="Task is not running")
-        task.status = payload.status
-        task.result = payload.result
-        task.error_message = payload.error_message
+        evidence = db.query(models.AIAutomationEvidence).filter(
+            models.AIAutomationEvidence.task_id == task.id
+        ).all()
+        archived_status, archive_reason = archive_terminal_status(payload.status, payload.result, evidence)
+        task.status = archived_status
+        task.result = archived_result(payload.status, payload.result, archive_reason)
+        task.error_message = payload.error_message or archive_reason
         task.input_tokens = payload.input_tokens
         task.output_tokens = payload.output_tokens
         task.completed_at = datetime.now(timezone.utc)
+        _record_budget_alerts(db, task)
         db.commit()
         db.refresh(task)
         _audit_task_action(
@@ -447,7 +510,7 @@ def register_ai_automation_routes(app) -> None:
             action="execute",
             task_id=task.id,
             project_id=task.project_id,
-            description=f"AI automation runner reported task {payload.status}",
+            description=f"AI automation runner report archived as {task.status}",
             metadata={
                 "actor_type": "runner",
                 "runner_id": runner.id,
@@ -465,10 +528,9 @@ def register_ai_automation_routes(app) -> None:
     def append_ai_automation_evidence(
         payload: schemas.AIAutomationEvidenceBatch,
         task_id: int = Path(..., ge=1),
-        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
         db: Session = Depends(get_db),
+        runner: models.AIAutomationRunner = Depends(require_automation_runner),
     ):
-        runner = _authenticate_runner(db, x_runner_token)
         task = _get_task(db, task_id)
         _verify_lease(task, runner, payload.lease_token)
         if task.status not in {"running", "cancel_requested"}:
@@ -507,11 +569,10 @@ def register_ai_automation_routes(app) -> None:
     async def upload_ai_automation_artifact(
         task_id: int = Path(..., ge=1),
         file: UploadFile = File(...),
-        x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
         x_lease_token: str | None = Header(None, alias="X-Lease-Token"),
         db: Session = Depends(get_db),
+        runner: models.AIAutomationRunner = Depends(require_automation_runner),
     ):
-        runner = _authenticate_runner(db, x_runner_token)
         task = _get_task(db, task_id)
         if not x_lease_token:
             raise HTTPException(status_code=401, detail="Task lease is required")
