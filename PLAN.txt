@@ -28,8 +28,8 @@ Mind Map 脑图关联测试用例功能实施计划
 - [ ] Web P0：验证 Playwright MCP 的 AI 探索能力，以及 Playwright Test + Chromium 的固定脚本回归和证据回传。
 - [ ] Mobile P0/P1：验证 mobile-mcp 的设备发现与操作；评估 Mobilewright/Appium 作为固定脚本方案，明确 Android Worker 和 macOS/iOS Worker 的部署边界。
 - [ ] API P0/P1：对 API Testing MCP 候选与原生 HTTP Runner 做一致性 PoC；Bruno MCP 仅作为集合回归候选，不在首期同时引入两套默认 API Agent。
-- [ ] 扩展 P1：分别评估 k6、OWASP ZAP、Schemathesis 的许可证、维护状态、资源消耗、结果格式和隔离要求。
-- [ ] 所有候选依赖在确定选型前记录版本、许可证、维护活跃度、已知安全风险及替代方案。
+- [x] 扩展 P1：分别评估 k6、OWASP ZAP、Schemathesis 的许可证、维护状态、资源消耗、结果格式和隔离要求；结论见 `docs/AI_AUTOMATION_COMPONENT_EVALUATION.md`。
+- [x] 所有候选依赖在确定选型前记录版本、许可证、维护活跃度、已知安全风险及替代方案；结论见 `docs/AI_AUTOMATION_COMPONENT_EVALUATION.md`。
 
 AI 自动化交付阶段：
 
@@ -131,6 +131,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：完成 AI 自动化候选组件评估 ADR。基于官方仓库、包元数据、变更日志与发布记录，登记 Playwright MCP、mobile-mcp、Appium、Bruno MCP、k6、ZAP、Schemathesis 的版本、许可证、维护信号、资源/隔离边界、风险和替代决策。维持原生 HTTP Runner 为默认 API 回归；Bruno MCP 因发布成熟度与完整响应体风险暂缓；专项工具只允许独立 Runner。该结论不替代真实外部 MCP/设备验收。
 - 2026-10-30：加强统一证据链完整性。后端端到端测试改为通过有效任务租约真实上传 PNG 截图、ZIP Trace 和控制台文本，再写入证据并归档到关联的 TestResult、TestExecution 与 TestRun；证据接口同时拒绝不存在或不属于当前任务的制品引用，避免记录可下载性为假的截图/Trace。相关制品与归档测试通过。
 - 2026-10-30：完成 Mobile Runner 当前环境边界验收。独立 Node 22 Alpine 镜像构建成功并以 `node` 用户运行，Compose 固化只读根、`cap_drop: ALL`、`no-new-privileges` 和资源限制；无 Appium 端点与尚未接入 mobile-mcp 的 AI 模式返回稳定 blocked 原因并有回归测试。当前无 Android/iOS 设备，真机截图和步骤回传保持未勾。
 - 2026-10-30：完成 API Runner Docker/真实 HTTP 烟测。独立 Node 22 Alpine 镜像在 `node` 用户、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、0.5 CPU/256 MiB 限制下，对容器内临时 HTTP 服务完成请求、状态码、Header、JSON Path 和响应 Schema 共 4 个断言，产生 5 条证据并返回 `testmona.api_result.v1`。Compose 固化只读根。API MCP 对照与关联真实测试轮次仍未勾。
