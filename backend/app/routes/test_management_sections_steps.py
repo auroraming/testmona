@@ -181,6 +181,7 @@ def register_section_step_routes(app):
     def create_test_case_steps_endpoint(
         test_case_id: int,
         steps: List[schemas.TestCaseStepCreate],
+        expected_updated_at: Optional[datetime] = Query(None),
         db: Session = Depends(get_db),
         current_user: schemas.User = Depends(get_current_active_user)
     ):
@@ -193,6 +194,16 @@ def register_section_step_routes(app):
             raise HTTPException(status_code=404, detail="Test suite not found for this test case")
         if not rbac.has_permission(current_user, "write", test_suite.project_id, db):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
+        if expected_updated_at is not None:
+            current_updated_at = test_case.updated_at
+            if current_updated_at is None or abs((current_updated_at.replace(tzinfo=None) - expected_updated_at.replace(tzinfo=None)).total_seconds()) > 0.001:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Test case was changed by another user. Reload it before saving steps.",
+                        "current_updated_at": current_updated_at.isoformat() if current_updated_at else None,
+                    },
+                )
 
         # Snapshot the existing steps so we record a revision only when the step
         # content actually changes. The editor re-POSTs steps on every save, so

@@ -93,6 +93,13 @@ after each step. It refuses to pass a script with no explicit assertion. AI
 exploration through Playwright MCP and controlled screenshot/Trace upload remain
 open before this Runner is production-ready.
 
+The Agent Runtime now has a hardened Playwright MCP stdio transport boundary:
+the package reference must be an exact version, the browser is headless and
+isolated, the target origin is explicit, service workers are blocked, and the
+allowlist excludes arbitrary JavaScript execution, unrestricted code, and file
+upload tools. The assertion proxy and Worker lifecycle still need to be
+connected before AI Web tasks are enabled.
+
 ## API Runner baseline
 
 The optional `api-runner` Compose profile uses the same lease, heartbeat,

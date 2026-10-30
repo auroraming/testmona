@@ -103,12 +103,13 @@ export const testCasesAPI = {
     const response = await api.get(`/test-cases/${id}/execution-history?limit=${limit}`);
     return response.data;
   },
-  createWithSteps: async (testCaseId: number, steps: any[]) => {
+  createWithSteps: async (testCaseId: number, steps: any[], expectedUpdatedAt?: string) => {
     const stepsWithTestCaseId = steps.map(step => ({
       ...step,
       test_case_id: testCaseId
     }));
-    const response = await api.post(`/test-cases/${testCaseId}/steps`, stepsWithTestCaseId);
+    const params = expectedUpdatedAt ? `?expected_updated_at=${encodeURIComponent(expectedUpdatedAt)}` : '';
+    const response = await api.post(`/test-cases/${testCaseId}/steps${params}`, stepsWithTestCaseId);
     return response.data;
   },
   assist: async (

@@ -146,6 +146,7 @@ export function Sidebar({
           { name: t('mindmaps'), href: `/projects/${projectId}/mindmaps`, icon: BrainCircuit, feature: 'test_cases' },
           { name: t('testSuites'), href: `/projects/${projectId}/test-suites`, icon: TestTube, feature: 'test_suites' },
           { name: t('testRuns'), href: `/projects/${projectId}/test-runs`, icon: PlayCircle, feature: 'test_runs' },
+          { name: t('aiAutomation'), href: `/projects/${projectId}/ai-automation`, icon: Sparkles },
         ]
       },
       {

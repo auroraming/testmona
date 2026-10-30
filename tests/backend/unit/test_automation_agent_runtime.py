@@ -15,10 +15,15 @@ class FakeMCP:
         return True
 
     async def discover_tools(self):
-        return [AutomationMCPTool("browser_click", "click", {"type": "object"})]
+        return [
+            AutomationMCPTool("browser_click", "click", {"type": "object"}),
+            AutomationMCPTool("browser_assert_visible", "assert visible", {"type": "object"}),
+        ]
 
     async def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
+        if "assert" in name:
+            return {"structured_content": {"passed": True}, "content": []}
         return {"structured_content": {"clicked": True}, "content": []}
 
 
@@ -49,7 +54,7 @@ async def test_runtime_calls_allowed_tool_then_finishes():
     runtime = AutomationAgentRuntime(
         SimpleNamespace(), mcp, project_id=1, user_id=2, max_steps=3, timeout_seconds=30,
         token_budget=100, completion=completion_sequence(
-            '{"type":"tool","tool":"browser_click","arguments":{"selector":"#go"}}',
+            '{"type":"tool","tool":"browser_assert_visible","arguments":{"selector":"#go"}}',
             '{"type":"finish","summary":"Assertion completed"}',
         ), step_callback=capture,
     )
@@ -57,8 +62,22 @@ async def test_runtime_calls_allowed_tool_then_finishes():
     assert result.status == "completed"
     assert result.summary == "Assertion completed"
     assert result.input_tokens == 20
-    assert mcp.calls == [("browser_click", {"selector": "#go"})]
-    assert [(step.sequence, step.tool) for step in observed] == [(1, "browser_click")]
+    assert mcp.calls == [("browser_assert_visible", {"selector": "#go"})]
+    assert [(step.sequence, step.tool) for step in observed] == [(1, "browser_assert_visible")]
+
+
+@pytest.mark.asyncio
+async def test_runtime_refuses_to_finish_without_passing_assertion():
+    runtime = AutomationAgentRuntime(
+        SimpleNamespace(), FakeMCP(), project_id=1, user_id=2, max_steps=3, timeout_seconds=30,
+        completion=completion_sequence(
+            '{"type":"tool","tool":"browser_click","arguments":{"selector":"#go"}}',
+            '{"type":"finish","summary":"looks good"}',
+        ),
+    )
+    result = await runtime.run("Open the page")
+    assert result.status == "failed"
+    assert result.error["code"] == "missing_assertion"
 
 
 @pytest.mark.asyncio

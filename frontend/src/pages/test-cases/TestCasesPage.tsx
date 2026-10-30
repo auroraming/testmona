@@ -180,6 +180,7 @@ export function TestCases() {
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'mindmap'>('list');
+  const mindmapNavigationGuardRef = useRef<(action: () => void) => void>((action) => action());
   const [recycleBinOpen, setRecycleBinOpen] = useState(false);
   const [deletedTestCases, setDeletedTestCases] = useState<TestCase[]>([]);
   const [recycleBinLoading, setRecycleBinLoading] = useState(false);
@@ -736,20 +737,22 @@ export function TestCases() {
   };
 
   const handleScopeSelection = (scope: string) => {
-    setSelectedTestSuite(scope);
+    const applySelection = () => {
+      setSelectedTestSuite(scope);
 
-    if (scope === 'all') return;
+      if (scope === 'all') return;
 
-    const suiteId = getSuiteIdFromSelectionValue(scope);
-    if (suiteId) {
-      setCurrentTestSuiteId(suiteId);
-      return;
-    }
+      const suiteId = getSuiteIdFromSelectionValue(scope);
+      if (suiteId) {
+        setCurrentTestSuiteId(suiteId);
+        return;
+      }
 
-    const section = findSectionById(mockSectionsRef.current, scope);
-    if (section?.test_suite_id) {
-      setCurrentTestSuiteId(section.test_suite_id);
-    }
+      const section = findSectionById(mockSectionsRef.current, scope);
+      if (section?.test_suite_id) setCurrentTestSuiteId(section.test_suite_id);
+    };
+    if (viewMode === 'mindmap') mindmapNavigationGuardRef.current(applySelection);
+    else applySelection();
   };
 
   // Load sections from API
@@ -2863,7 +2866,7 @@ export function TestCases() {
       await loadTestCases();
       toast({ title: t('success'), description: t('testCaseUpdatedSuccessfully') });
     } catch (error) {
-      await loadTestCases();
+      if ((error as { response?: { status?: number } })?.response?.status !== 409) await loadTestCases();
       toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
       throw error;
     }
@@ -2894,14 +2897,16 @@ export function TestCases() {
   const updateMindmapCase = async (
     testCaseId: number,
     patch: Partial<Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>>,
+    options?: { deferReload?: boolean },
   ) => {
     try {
       const current = apiTestCases.find((testCase) => testCase.id === testCaseId);
-      await testCasesAPI.update(testCaseId, { ...patch, expected_updated_at: current?.updated_at });
-      await loadTestCases();
+      const updated = await testCasesAPI.update(testCaseId, { ...patch, expected_updated_at: current?.updated_at });
+      if (!options?.deferReload) await loadTestCases();
       toast({ title: t('success'), description: t('testCaseUpdatedSuccessfully') });
+      return updated?.updated_at as string | undefined;
     } catch (error) {
-      await loadTestCases();
+      if ((error as { response?: { status?: number } })?.response?.status !== 409) await loadTestCases();
       toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
       throw error;
     }
@@ -2912,11 +2917,13 @@ export function TestCases() {
   const updateMindmapCaseSteps = async (
     testCaseId: number,
     steps: Array<{ step_number: number; action: string; expected_result: string; step_type: string }>,
+    expectedUpdatedAt?: string,
   ) => {
     try {
-      await testCasesAPI.createWithSteps(testCaseId, steps);
+      await testCasesAPI.createWithSteps(testCaseId, steps, expectedUpdatedAt);
       await loadTestCases();
     } catch (error) {
+      if ((error as { response?: { status?: number } })?.response?.status !== 409) await loadTestCases();
       toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToUpdateTestCase')), variant: 'destructive' });
       throw error;
     }
@@ -2924,8 +2931,10 @@ export function TestCases() {
 
   const createMindmapCase = (sectionId: number | null) => {
     if (!currentTestSuiteId) return;
-    setSelectedTestSuite(sectionId ? String(sectionId) : getUnsectionedSelectionValue(currentTestSuiteId));
-    handleOpenModal();
+    mindmapNavigationGuardRef.current(() => {
+      setSelectedTestSuite(sectionId ? String(sectionId) : getUnsectionedSelectionValue(currentTestSuiteId));
+      handleOpenModal();
+    });
   };
 
   const openRecycleBin = async () => {
@@ -4203,7 +4212,7 @@ export function TestCases() {
                   type="button"
                   size="sm"
                   variant={viewMode === 'list' ? 'secondary' : 'ghost'}
-                  onClick={() => setViewMode('list')}
+                  onClick={() => mindmapNavigationGuardRef.current(() => setViewMode('list'))}
                 >
                   <List className="mr-2 h-4 w-4" />{t('listView')}
                 </Button>
@@ -4416,6 +4425,7 @@ export function TestCases() {
                 unsavedChangesDescription: t('mindmapUnsavedChangesDescription'),
                 discard: t('discard'),
                 loadMore: t('loadMore'),
+                exportJson: t('mindmapExportJson'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
@@ -4428,7 +4438,8 @@ export function TestCases() {
               onUpdateCaseSteps={updateMindmapCaseSteps}
               onCopyNode={copyMindmapNode}
               onDeleteNode={deleteMindmapNode}
-              onOpenCase={(testCaseId) => navigate(getTestCaseDetailUrl(testCaseId))}
+              onOpenCase={(testCaseId) => mindmapNavigationGuardRef.current(() => navigate(getTestCaseDetailUrl(testCaseId)))}
+              navigationGuardRef={mindmapNavigationGuardRef}
             />
           ) : (
           <>

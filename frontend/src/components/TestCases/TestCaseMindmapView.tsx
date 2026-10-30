@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import MindElixir, { type MindElixirData, type MindElixirInstance, type NodeObj } from 'mind-elixir';
 import 'mind-elixir/style.css';
-import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Edit, Expand, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Download, Edit, Expand, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, X } from 'lucide-react';
+import { saveAs } from 'file-saver';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -27,11 +28,12 @@ type SelectedNode = {
 };
 type ActionNode = Omit<SelectedNode, 'kind'> & { kind: 'suite' | 'section' | 'case' };
 
-type CaseDraft = Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result'>;
+type CaseDraft = Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>;
 type CaseStepDraft = { step_number: number; action: string; expected_result: string; step_type: string };
-type HistoryCommand = { undo: () => Promise<void>; redo: () => Promise<void> };
+type DraftState = { caseDraft: CaseDraft; stepDrafts: CaseStepDraft[] };
+type HistoryCommand = { undo: () => Promise<unknown>; redo: () => Promise<unknown> };
 
-const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '', expected_result: '' };
+const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '', expected_result: '', priority: 'medium' };
 const CASE_BATCH_SIZE = 500;
 
 type Props = {
@@ -70,6 +72,7 @@ type Props = {
     unsavedChangesDescription: string;
     discard: string;
     loadMore: string;
+    exportJson: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -78,12 +81,17 @@ type Props = {
   onRenameCase: (testCaseId: number, name: string) => Promise<void>;
   onMoveSection: (sectionId: number, parentSectionId: number | null) => Promise<void>;
   onMoveCase: (testCaseId: number, sectionId: number | null) => Promise<void>;
-  onUpdateCase: (testCaseId: number, patch: Partial<Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>>) => Promise<void>;
+  onUpdateCase: (
+    testCaseId: number,
+    patch: Partial<Pick<TestCase, 'description' | 'preconditions' | 'steps' | 'expected_result' | 'priority'>>,
+    options?: { deferReload?: boolean },
+  ) => Promise<string | undefined>;
   onLoadCaseSteps: (testCaseId: number) => Promise<CaseStepDraft[]>;
-  onUpdateCaseSteps: (testCaseId: number, steps: CaseStepDraft[]) => Promise<void>;
+  onUpdateCaseSteps: (testCaseId: number, steps: CaseStepDraft[], expectedUpdatedAt?: string) => Promise<void>;
   onCopyNode: (node: ActionNode, targetSectionId: number | null) => Promise<void>;
   onDeleteNode: (node: ActionNode) => Promise<void>;
   onOpenCase: (testCaseId: number) => void;
+  navigationGuardRef: MutableRefObject<(action: () => void) => void>;
 };
 
 const sectionNodeId = (id: string | number) => `section:${id}`;
@@ -121,6 +129,7 @@ export function TestCaseMindmapView({
   onCopyNode,
   onDeleteNode,
   onOpenCase,
+  navigationGuardRef,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -130,13 +139,14 @@ export function TestCaseMindmapView({
   const [dialog, setDialog] = useState<'section' | 'rename' | null>(null);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [sectionParentId, setSectionParentId] = useState<number | null>(null);
   const [caseDraft, setCaseDraft] = useState<CaseDraft>(emptyCaseDraft);
   const [stepDrafts, setStepDrafts] = useState<CaseStepDraft[]>([]);
   const [stepsByCase, setStepsByCase] = useState<Record<number, CaseStepDraft[]>>({});
   const [savedSnapshot, setSavedSnapshot] = useState('');
-  const [draftHistory, setDraftHistory] = useState<CaseDraft[]>([emptyCaseDraft]);
+  const [draftHistory, setDraftHistory] = useState<DraftState[]>([{ caseDraft: emptyCaseDraft, stepDrafts: [] }]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [pendingSelection, setPendingSelection] = useState<SelectedNode | null>(null);
   const [guardOpen, setGuardOpen] = useState(false);
@@ -146,10 +156,13 @@ export function TestCaseMindmapView({
   const clipboardRef = useRef<typeof clipboard>(null);
   const selectedRef = useRef<SelectedNode | null>(null);
   const dirtyRef = useRef(false);
-  const draftHistoryRef = useRef<CaseDraft[]>([emptyCaseDraft]);
+  const caseDraftRef = useRef<CaseDraft>(emptyCaseDraft);
+  const stepDraftsRef = useRef<CaseStepDraft[]>([]);
+  const draftHistoryRef = useRef<DraftState[]>([{ caseDraft: emptyCaseDraft, stepDrafts: [] }]);
   const historyIndexRef = useRef(0);
   const stepsByCaseRef = useRef<Record<number, CaseStepDraft[]>>({});
   const structuralHistoryRef = useRef<HistoryCommand[]>([]);
+  const pendingActionRef = useRef<(() => void) | null>(null);
   const structuralIndexRef = useRef(0);
   const [, setStructuralVersion] = useState(0);
 
@@ -158,6 +171,8 @@ export function TestCaseMindmapView({
   useEffect(() => { draftHistoryRef.current = draftHistory; }, [draftHistory]);
   useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
   useEffect(() => { stepsByCaseRef.current = stepsByCase; }, [stepsByCase]);
+  useEffect(() => { caseDraftRef.current = caseDraft; }, [caseDraft]);
+  useEffect(() => { stepDraftsRef.current = stepDrafts; }, [stepDrafts]);
   useEffect(() => {
     structuralHistoryRef.current = [];
     structuralIndexRef.current = 0;
@@ -177,27 +192,42 @@ export function TestCaseMindmapView({
       preconditions: selectedCase.preconditions || '',
       steps: selectedCase.steps || '',
       expected_result: selectedCase.expected_result || '',
+      priority: selectedCase.priority,
     };
     setCaseDraft(nextDraft);
-    setDraftHistory([nextDraft]);
-    setHistoryIndex(0);
     if (selectedCase.is_multistep) {
       void onLoadCaseSteps(selectedCase.id).then((items) => {
         const normalized = items.map((item, index) => ({ ...item, step_number: index + 1, step_type: item.step_type || 'manual' }));
         setStepDrafts(normalized);
+        setDraftHistory([{ caseDraft: nextDraft, stepDrafts: normalized }]);
+        setHistoryIndex(0);
         setStepsByCase((current) => ({ ...current, [selectedCase.id]: normalized }));
         setSavedSnapshot(JSON.stringify({ caseDraft: nextDraft, stepDrafts: normalized }));
       });
     } else {
       setStepDrafts([]);
+      setDraftHistory([{ caseDraft: nextDraft, stepDrafts: [] }]);
+      setHistoryIndex(0);
       setSavedSnapshot(JSON.stringify({ caseDraft: nextDraft, stepDrafts: [] }));
     }
-  }, [selectedCase?.id, selectedCase?.description, selectedCase?.preconditions, selectedCase?.steps, selectedCase?.expected_result]);
+  }, [selectedCase?.id, selectedCase?.description, selectedCase?.preconditions, selectedCase?.steps, selectedCase?.expected_result, selectedCase?.priority]);
 
   const currentSnapshot = JSON.stringify({ caseDraft, stepDrafts });
   const isDirty = Boolean(selectedCase && savedSnapshot && currentSnapshot !== savedSnapshot);
 
   useEffect(() => { dirtyRef.current = isDirty; }, [isDirty]);
+  useEffect(() => {
+    navigationGuardRef.current = (action) => {
+      if (!dirtyRef.current) {
+        action();
+        return;
+      }
+      pendingActionRef.current = action;
+      setPendingSelection(null);
+      setGuardOpen(true);
+    };
+    return () => { navigationGuardRef.current = (action) => action(); };
+  }, [navigationGuardRef]);
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirtyRef.current) return;
@@ -208,9 +238,20 @@ export function TestCaseMindmapView({
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, []);
 
-  const updateCaseDraft = (next: CaseDraft) => {
-    setCaseDraft(next);
-    const nextHistory = [...draftHistoryRef.current.slice(0, historyIndexRef.current + 1), next];
+  const applyDraftState = (state: DraftState) => {
+    const stepsChanged = state.stepDrafts !== stepDraftsRef.current;
+    caseDraftRef.current = state.caseDraft;
+    stepDraftsRef.current = state.stepDrafts;
+    setCaseDraft(state.caseDraft);
+    setStepDrafts(state.stepDrafts);
+    const caseId = selectedCaseNodeId(selectedRef.current);
+    if (stepsChanged && caseId) setStepsByCase((current) => ({ ...current, [caseId]: state.stepDrafts }));
+  };
+
+  const pushDraftState = (nextCaseDraft: CaseDraft, nextStepDrafts: CaseStepDraft[]) => {
+    const state = { caseDraft: nextCaseDraft, stepDrafts: nextStepDrafts };
+    applyDraftState(state);
+    const nextHistory = [...draftHistoryRef.current.slice(0, historyIndexRef.current + 1), state];
     const nextIndex = historyIndexRef.current + 1;
     draftHistoryRef.current = nextHistory;
     historyIndexRef.current = nextIndex;
@@ -218,12 +259,15 @@ export function TestCaseMindmapView({
     setHistoryIndex(nextIndex);
   };
 
+  const updateCaseDraft = (next: CaseDraft) => pushDraftState(next, stepDrafts);
+
   const undoDraft = () => {
     if (historyIndexRef.current <= 0) return;
     const nextIndex = historyIndexRef.current - 1;
     setHistoryIndex(nextIndex);
     historyIndexRef.current = nextIndex;
-    setCaseDraft(draftHistoryRef.current[nextIndex]);
+    const state = draftHistoryRef.current[nextIndex];
+    applyDraftState(state);
   };
 
   const redoDraft = () => {
@@ -231,7 +275,8 @@ export function TestCaseMindmapView({
     const nextIndex = historyIndexRef.current + 1;
     setHistoryIndex(nextIndex);
     historyIndexRef.current = nextIndex;
-    setCaseDraft(draftHistoryRef.current[nextIndex]);
+    const state = draftHistoryRef.current[nextIndex];
+    applyDraftState(state);
   };
 
   const pushStructuralHistory = (command: HistoryCommand) => {
@@ -475,15 +520,13 @@ export function TestCaseMindmapView({
           }
           else if (metadata.caseId && metadata.fieldKey) {
             const value = operation.obj.topic === '—' ? '' : operation.obj.topic;
-            await onUpdateCase(metadata.caseId, { [metadata.fieldKey]: value });
+            pushDraftState({ ...caseDraftRef.current, [metadata.fieldKey]: value }, stepDraftsRef.current);
           } else if (metadata.kind === 'step' && metadata.caseId && metadata.stepIndex !== undefined && metadata.stepPart) {
             const currentSteps = stepsByCaseRef.current[metadata.caseId] || [];
             const nextSteps = currentSteps.map((step, index) => index === metadata.stepIndex
               ? { ...step, [metadata.stepPart!]: operation.obj.topic === '—' ? '' : operation.obj.topic }
               : step);
-            await onUpdateCaseSteps(metadata.caseId, nextSteps);
-            setStepsByCase((current) => ({ ...current, [metadata.caseId!]: nextSteps }));
-            if (selectedCaseNodeId(selectedRef.current) === metadata.caseId) setStepDrafts(nextSteps);
+            if (selectedCaseNodeId(selectedRef.current) === metadata.caseId) pushDraftState(caseDraftRef.current, nextSteps);
           }
         } catch {
           mind.refresh(structuredClone(data));
@@ -540,7 +583,7 @@ export function TestCaseMindmapView({
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
         event.preventDefault();
-        void pasteClipboard(metadata);
+        navigationGuardRef.current(() => void pasteClipboard(metadata));
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
@@ -574,18 +617,15 @@ export function TestCaseMindmapView({
         if (mind.currentNode) void mind.beginEdit(mind.currentNode);
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind === 'field' && metadata.caseId && metadata.fieldKey) {
         event.preventDefault();
-        void onUpdateCase(metadata.caseId, { [metadata.fieldKey]: '' });
+        pushDraftState({ ...caseDraftRef.current, [metadata.fieldKey]: '' }, stepDraftsRef.current);
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind === 'step' && metadata.caseId && metadata.stepIndex !== undefined && metadata.stepPart) {
         event.preventDefault();
         const currentSteps = stepsByCaseRef.current[metadata.caseId] || [];
         const nextSteps = currentSteps.map((step, index) => index === metadata.stepIndex ? { ...step, [metadata.stepPart!]: '' } : step);
-        void onUpdateCaseSteps(metadata.caseId, nextSteps).then(() => {
-          setStepsByCase((current) => ({ ...current, [metadata.caseId!]: nextSteps }));
-          setStepDrafts(nextSteps);
-        });
+        pushDraftState(caseDraftRef.current, nextSteps);
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && metadata.kind !== 'suite') {
         event.preventDefault();
-        void onDeleteNode(metadata as ActionNode);
+        navigationGuardRef.current(() => void onDeleteNode(metadata as ActionNode));
       }
     };
     mind.bus.addListener('selectNodes', select);
@@ -657,9 +697,9 @@ export function TestCaseMindmapView({
     if (!selectedCase) return;
     setSaving(true);
     try {
-      await onUpdateCase(selectedCase.id, caseDraft);
+      const updatedAt = await onUpdateCase(selectedCase.id, caseDraft, { deferReload: selectedCase.is_multistep });
       if (selectedCase.is_multistep) {
-        await onUpdateCaseSteps(selectedCase.id, stepDrafts);
+        await onUpdateCaseSteps(selectedCase.id, stepDrafts, updatedAt);
         setStepsByCase((current) => ({ ...current, [selectedCase.id]: stepDrafts }));
       }
       setSavedSnapshot(JSON.stringify({ caseDraft, stepDrafts }));
@@ -669,14 +709,59 @@ export function TestCaseMindmapView({
   };
 
   const renumberSteps = (items: CaseStepDraft[]) => items.map((item, index) => ({ ...item, step_number: index + 1 }));
-  const updateStep = (index: number, patch: Partial<CaseStepDraft>) => setStepDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
-  const moveStep = (index: number, offset: -1 | 1) => setStepDrafts((current) => {
+  const updateStep = (index: number, patch: Partial<CaseStepDraft>) => {
+    const next = stepDrafts.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
+    pushDraftState(caseDraft, next);
+  };
+  const moveStep = (index: number, offset: -1 | 1) => {
     const target = index + offset;
-    if (target < 0 || target >= current.length) return current;
-    const next = [...current];
+    if (target < 0 || target >= stepDrafts.length) return;
+    const next = [...stepDrafts];
     [next[index], next[target]] = [next[target], next[index]];
-    return renumberSteps(next);
-  });
+    pushDraftState(caseDraft, renumberSteps(next));
+  };
+
+  const exportJson = async () => {
+    setExporting(true);
+    try {
+      const structuredSteps = new Map<number, CaseStepDraft[]>();
+      await Promise.all(testCases.filter((testCase) => testCase.is_multistep).map(async (testCase) => {
+        const cached = stepsByCaseRef.current[testCase.id];
+        structuredSteps.set(testCase.id, cached || await onLoadCaseSteps(testCase.id));
+      }));
+      const serializeSection = (section: Section): Record<string, unknown> => ({
+        id: Number(section.id),
+        name: section.name,
+        parent_id: section.parentId ? Number(section.parentId) : null,
+        children: (section.children || []).map(serializeSection),
+      });
+      const payload = {
+        format: 'testmona.test-case-mindmap',
+        version: 1,
+        exported_at: new Date().toISOString(),
+        suite: { id: suiteId, name: suiteName },
+        sections: sections.map(serializeSection),
+        test_cases: testCases.map((testCase) => ({
+          id: testCase.id,
+          project_seq: testCase.project_seq,
+          section_id: testCase.section_id ?? null,
+          title: testCase.title,
+          priority: testCase.priority,
+          test_type: testCase.test_type,
+          description: testCase.description || '',
+          preconditions: testCase.preconditions || '',
+          is_multistep: Boolean(testCase.is_multistep),
+          steps: testCase.is_multistep
+            ? structuredSteps.get(testCase.id) || []
+            : [{ step_number: 1, action: testCase.steps || '', expected_result: testCase.expected_result || '', step_type: 'manual' }],
+        })),
+      };
+      const safeName = suiteName.replace(/[\\/:*?"<>|]+/g, '-').trim() || `suite-${suiteId}`;
+      saveAs(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }), `${safeName}-mindmap.json`);
+    } finally {
+      setExporting(false);
+    }
+  };
   const continueWithSelection = () => {
     dirtyRef.current = false;
     setSelected(pendingSelection);
@@ -690,12 +775,17 @@ export function TestCaseMindmapView({
     }
     setPendingSelection(null);
     setGuardOpen(false);
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    action?.();
   };
   const discardDraft = () => {
     if (savedSnapshot) {
       const parsed = JSON.parse(savedSnapshot) as { caseDraft: CaseDraft; stepDrafts: CaseStepDraft[] };
       setCaseDraft(parsed.caseDraft);
       setStepDrafts(parsed.stepDrafts);
+      setDraftHistory([parsed]);
+      setHistoryIndex(0);
     }
     continueWithSelection();
   };
@@ -714,16 +804,17 @@ export function TestCaseMindmapView({
           <Button size="icon" variant="ghost" title={labels.redo} onClick={() => void redo()} disabled={historyIndex >= draftHistory.length - 1 && structuralIndexRef.current >= structuralHistoryRef.current.length}><Redo2 className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fit} onClick={() => instanceRef.current?.scaleFit()}><Expand className="h-4 w-4" /></Button>
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" onClick={() => void exportJson()} disabled={exporting}><Download className="mr-1 h-4 w-4" />{labels.exportJson}</Button>
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
           {canWrite && <Button size="sm" variant="ghost" onClick={() => onCreateCase(selected?.kind === 'section' ? selected.id : null)}><Plus className="mr-1 h-4 w-4" />{labels.addCase}</Button>}
           {visibleCaseLimit < testCases.length && <Button size="sm" variant="ghost" onClick={() => setVisibleCaseLimit((current) => Math.min(current + CASE_BATCH_SIZE, testCases.length))}>{labels.loadMore} ({Math.min(visibleCaseLimit, testCases.length)}/{testCases.length})</Button>}
         </div>
       </div>
 
-      {selected && detailOpen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => setDetailOpen(false)} />}
+      {selected && detailOpen && <button type="button" aria-label={labels.cancel} className="fixed inset-0 z-40 bg-black/40 xl:hidden" onClick={() => navigationGuardRef.current(() => setDetailOpen(false))} />}
       <aside className={`${detailOpen ? 'fixed' : 'hidden'} inset-y-4 right-4 z-50 w-[min(90vw,360px)] overflow-y-auto rounded-lg border bg-card p-4 shadow-xl xl:static xl:z-auto xl:block xl:w-auto xl:max-h-[calc(100vh-18rem)] xl:shadow-none`}>
         <div className="mb-2 flex justify-end xl:hidden">
-          <Button type="button" size="icon" variant="ghost" title={labels.cancel} onClick={() => setDetailOpen(false)}><X className="h-4 w-4" /></Button>
+          <Button type="button" size="icon" variant="ghost" title={labels.cancel} onClick={() => navigationGuardRef.current(() => setDetailOpen(false))}><X className="h-4 w-4" /></Button>
         </div>
         {selected ? (
           <div className="space-y-4">
@@ -738,7 +829,7 @@ export function TestCaseMindmapView({
               <div className="space-y-3 border-t pt-4">
                 <div className="space-y-1.5">
                   <Label>{labels.priority}</Label>
-                  <Select value={selectedCase.priority} onValueChange={(priority) => void onUpdateCase(selectedCase.id, { priority: priority as TestCase['priority'] })} disabled={!canWrite}>
+                  <Select value={caseDraft.priority} onValueChange={(priority) => updateCaseDraft({ ...caseDraft, priority: priority as TestCase['priority'] })} disabled={!canWrite}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>{priorityOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
                   </Select>
@@ -761,13 +852,13 @@ export function TestCaseMindmapView({
                         <div className="flex gap-1">
                           <Button type="button" size="icon" variant="ghost" className="h-7 w-7" onClick={() => moveStep(index, -1)} disabled={!canWrite || index === 0}><ArrowUp className="h-3.5 w-3.5" /></Button>
                           <Button type="button" size="icon" variant="ghost" className="h-7 w-7" onClick={() => moveStep(index, 1)} disabled={!canWrite || index === stepDrafts.length - 1}><ArrowDown className="h-3.5 w-3.5" /></Button>
-                          <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setStepDrafts((current) => renumberSteps(current.filter((_, itemIndex) => itemIndex !== index)))} disabled={!canWrite}><X className="h-3.5 w-3.5" /></Button>
+                          <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => pushDraftState(caseDraft, renumberSteps(stepDrafts.filter((_, itemIndex) => itemIndex !== index)))} disabled={!canWrite}><X className="h-3.5 w-3.5" /></Button>
                         </div>
                       </div>
                       <Textarea value={step.action} onChange={(event) => updateStep(index, { action: event.target.value })} rows={2} disabled={!canWrite} />
                       <Input value={step.expected_result} onChange={(event) => updateStep(index, { expected_result: event.target.value })} placeholder={labels.expectedResult} disabled={!canWrite} />
                     </div>)}
-                    <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => setStepDrafts((current) => [...current, { step_number: current.length + 1, action: '', expected_result: '', step_type: 'manual' }])} disabled={!canWrite}><Plus className="mr-2 h-4 w-4" />{labels.addStep}</Button>
+                    <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => pushDraftState(caseDraft, [...stepDrafts, { step_number: stepDrafts.length + 1, action: '', expected_result: '', step_type: 'manual' }])} disabled={!canWrite}><Plus className="mr-2 h-4 w-4" />{labels.addStep}</Button>
                     <p className="text-xs text-muted-foreground">{labels.structuredStepsHint}</p>
                   </div>}
                 </div>
@@ -783,8 +874,8 @@ export function TestCaseMindmapView({
               <Button variant="outline" onClick={() => setClipboard({ mode: 'copy', node: selected as ActionNode })}><Copy className="mr-2 h-4 w-4" />{labels.copy}</Button>
               <Button variant="outline" onClick={() => setClipboard({ mode: 'cut', node: selected as ActionNode })}><Scissors className="mr-2 h-4 w-4" />{labels.cut}</Button>
             </div>}
-            {canWrite && clipboard && <Button variant="outline" className="w-full" onClick={() => void pasteClipboard(selected)}><ClipboardPaste className="mr-2 h-4 w-4" />{labels.paste}</Button>}
-            {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="destructive" className="w-full" onClick={() => void onDeleteNode(selected as ActionNode)}><Trash2 className="mr-2 h-4 w-4" />{labels.delete}</Button>}
+            {canWrite && clipboard && <Button variant="outline" className="w-full" onClick={() => navigationGuardRef.current(() => void pasteClipboard(selected))}><ClipboardPaste className="mr-2 h-4 w-4" />{labels.paste}</Button>}
+            {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="destructive" className="w-full" onClick={() => navigationGuardRef.current(() => void onDeleteNode(selected as ActionNode))}><Trash2 className="mr-2 h-4 w-4" />{labels.delete}</Button>}
             {canWrite && <Button variant="outline" className="w-full" onClick={openSectionDialog}><FolderPlus className="mr-2 h-4 w-4" />{labels.addModule}</Button>}
             {canWrite && <Button variant="outline" className="w-full" onClick={() => onCreateCase(selected.kind === 'section' ? selected.id : selected.sectionId ?? null)}><Plus className="mr-2 h-4 w-4" />{labels.addCase}</Button>}
           </div>
@@ -811,7 +902,7 @@ export function TestCaseMindmapView({
           <DialogHeader><DialogTitle>{labels.unsavedChanges}</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">{labels.unsavedChangesDescription}</p>
           <DialogFooter className="sm:justify-between">
-            <Button variant="outline" onClick={() => { setGuardOpen(false); setPendingSelection(null); }}>{labels.cancel}</Button>
+            <Button variant="outline" onClick={() => { setGuardOpen(false); setPendingSelection(null); pendingActionRef.current = null; }}>{labels.cancel}</Button>
             <div className="flex gap-2">
               <Button variant="destructive" onClick={discardDraft}>{labels.discard}</Button>
               <Button onClick={() => void saveAndContinue()} disabled={saving}>{labels.save}</Button>

@@ -32,6 +32,7 @@ const TestSuites = lazyPage(() => import('@/pages/TestSuites'), 'TestSuites');
 const TestSuiteDetail = lazyPage(() => import('@/pages/TestSuiteDetail'), 'TestSuiteDetail');
 const TestCases = lazyPage(() => import('@/pages/TestCases'), 'TestCases');
 const Mindmaps = lazyPage(() => import('@/pages/Mindmaps'), 'Mindmaps');
+const AIAutomation = lazyPage(() => import('@/pages/AIAutomation'), 'AIAutomation');
 const TestCaseDetail = lazyPage(() => import('@/pages/TestCaseDetail'), 'TestCaseDetail');
 const TestCaseEdit = lazyPage(() => import('@/pages/TestCaseEdit'), 'TestCaseEdit');
 const TestCaseRevisions = lazyPage(() => import('@/pages/TestCaseRevisions'), 'TestCaseRevisions');
@@ -301,6 +302,9 @@ function AppWithRouter() {
               <Mindmaps />
             </FeatureGuard>
           </ProjectGuard>
+        } />
+        <Route path="/projects/:projectId/ai-automation" element={
+          <ProjectGuard><AIAutomation /></ProjectGuard>
         } />
         <Route path="/projects/:projectId/mindmaps/:mindmapId" element={
           <ProjectGuard>

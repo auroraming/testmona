@@ -112,6 +112,17 @@ class AutomationAgentRuntime:
             raise AgentRuntimeError("invalid_model_output", "Tool decisions must name a tool")
         return decision
 
+    @staticmethod
+    def _has_passing_assertion(steps: list[AgentStep]) -> bool:
+        """Require machine-verifiable assertion evidence before reporting success."""
+        for step in steps:
+            if step.error or "assert" not in step.tool.lower() or not isinstance(step.output, dict):
+                continue
+            candidates = [step.output, step.output.get("structured_content"), step.output.get("result")]
+            if any(isinstance(candidate, dict) and candidate.get("passed") is True for candidate in candidates):
+                return True
+        return False
+
     async def _is_cancelled(self) -> bool:
         return bool(self.cancellation_check and await self.cancellation_check())
 
@@ -185,6 +196,11 @@ class AutomationAgentRuntime:
 
                 decision = self._parse_decision(completion.content)
                 if decision.type == "finish":
+                    if not self._has_passing_assertion(steps):
+                        raise AgentRuntimeError(
+                            "missing_assertion",
+                            "AI cannot finish successfully without a passing assertion tool result",
+                        )
                     return AgentRuntimeResult("completed", decision.summary, steps, input_tokens, output_tokens)
 
                 step = AgentStep(len(steps) + 1, decision.tool or "", decision.arguments)
