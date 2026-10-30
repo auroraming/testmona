@@ -39,9 +39,22 @@ export class RunnerProtocol {
     if (!response.ok) throw new Error(data.detail || `Artifact upload HTTP ${response.status}`);
     return data;
   }
-  report(lease, status, result, errorMessage = null) {
+  complete(lease, prompt, maxTokens = 800) {
+    return this.request(`/internal/ai-automation/tasks/${lease.task.id}/completion`, {
+      method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, prompt, max_tokens: maxTokens }),
+    });
+  }
+  report(lease, status, result, errorMessage = null, inputTokens = 0, outputTokens = 0) {
     return this.request(`/internal/ai-automation/tasks/${lease.task.id}/report`, {
-      method: 'POST', body: JSON.stringify({ lease_token: lease.lease_token, status, result, error_message: errorMessage }),
+      method: 'POST',
+      body: JSON.stringify({
+        lease_token: lease.lease_token,
+        status,
+        result,
+        error_message: errorMessage,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+      }),
     });
   }
 }

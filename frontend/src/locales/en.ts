@@ -129,7 +129,7 @@ export const en = {
   aiAutomationCancelFailed: 'Failed to cancel automation task.',
   aiAutomationNoEvidence: 'No evidence has been reported yet.',
   aiAutomationRunnerAvailability: 'Runner availability',
-  aiAutomationRunnerAvailable: '{{count}} compatible Runner(s) available',
+  aiAutomationRunnerAvailable: '{count} compatible Runner(s) available',
   aiAutomationRunnerUnavailable: 'No compatible Runner online',
   aiAutomationQueueWithoutRunner: 'You can still queue the task. It will wait until a compatible Runner comes online.',
   mindmapImported: 'XMind file imported as a new mind map.',

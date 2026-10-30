@@ -82,6 +82,8 @@ services:
       - TESTMONA_BACKEND_URL=${TESTMONA_BACKEND_URL:-http://backend:8000}
       - TESTMONA_RUNNER_TOKEN=${TESTMONA_WEB_RUNNER_TOKEN:-}
       - TESTMONA_RUNNER_POLL_MS=${TESTMONA_RUNNER_POLL_MS:-3000}
+      - TESTMONA_PLAYWRIGHT_MCP_PACKAGE=${TESTMONA_PLAYWRIGHT_MCP_PACKAGE:-@playwright/mcp@0.0.83}
+      - TESTMONA_PLAYWRIGHT_WORKSPACE=/runner/artifacts
     depends_on:
       backend:
         condition: service_healthy
