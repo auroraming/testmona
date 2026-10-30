@@ -102,7 +102,11 @@ test('uploads screenshot, trace, and console log before the worker stops', async
     '{"type":"tool","tool":"browser_assert_text","arguments":{"expected":"Welcome"}}',
     '{"type":"finish","summary":"Title is visible"}',
   ]);
-  runner.uploadArtifact = async (_lease, _bytes, filename) => ({ artifact_ref: `ai-automation/7/${filename}` });
+  const uploads = [];
+  runner.uploadArtifact = async (_lease, bytes, filename) => {
+    uploads.push({ filename, body: Buffer.from(bytes).toString() });
+    return { artifact_ref: `ai-automation/7/${filename}` };
+  };
   let stopped = 0;
   const result = await executeWebAi(lease(), {
     protocol: runner,
@@ -114,10 +118,13 @@ test('uploads screenshot, trace, and console log before the worker stops', async
         },
         async callTool(name) {
           if (name === 'browser_console_messages') return { content: [{ type: 'text', text: 'console ready' }] };
-          if (name === 'browser_stop_tracing') {
+          if (name === 'browser_start_tracing') {
             await mkdir(path.join(dir, 'traces'), { recursive: true });
-            await writeFile(path.join(dir, 'traces', 'trace-99.trace'), Buffer.from('PK'));
-            await writeFile(path.join(dir, 'traces', 'trace-99.network'), Buffer.from('net'));
+            await writeFile(path.join(dir, 'traces', 'trace-99.trace'), 'UNCLOSED-NDJSON');
+            return { content: [] };
+          }
+          if (name === 'browser_stop_tracing') {
+            await writeFile(path.join(dir, 'traces', 'trace-99.trace'), Buffer.from('PK-FINAL'));
             return { content: [] };
           }
           if (name === 'browser_snapshot') return { content: [{ type: 'text', text: 'heading "Welcome"' }] };
@@ -135,7 +142,10 @@ test('uploads screenshot, trace, and console log before the worker stops', async
   const trace = runner.events.evidence.find((item) => item.evidence_type === 'trace');
   const log = runner.events.evidence.find((item) => item.evidence_type === 'log');
   assert.equal(screenshot.artifact_ref, 'ai-automation/7/page.png');
-  assert.match(trace.artifact_ref, /trace-99\.trace/);
+  assert.equal(trace.evidence_type, 'trace');
+  assert.equal(trace.artifact_ref, 'ai-automation/7/trace-99.trace');
+  const traceUploads = uploads.filter((item) => item.filename === 'trace-99.trace');
+  assert.deepEqual(traceUploads.map((item) => item.body), ['PK-FINAL']);
   assert.match(log.artifact_ref, /console\.txt/);
   assert.equal(stopped, 1);
 });

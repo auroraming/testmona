@@ -128,24 +128,30 @@ function evidenceFor(step) {
   };
 }
 
-async function uploadNewArtifacts(outputDir, protocol, lease, seen) {
+function isTracePath(relative) {
+  return relative.split(path.sep).includes('traces') || relative.endsWith('.trace');
+}
+
+async function uploadNewArtifacts(outputDir, protocol, lease, seen, { tracesOnly = false } = {}) {
   if (!outputDir) return [];
   const uploaded = [];
-  await collectArtifacts(outputDir, outputDir, protocol, lease, seen, uploaded);
+  await collectArtifacts(outputDir, outputDir, protocol, lease, seen, uploaded, tracesOnly);
   return uploaded;
 }
 
-async function collectArtifacts(directory, root, protocol, lease, seen, uploaded) {
+async function collectArtifacts(directory, root, protocol, lease, seen, uploaded, tracesOnly) {
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     const relative = path.relative(root, fullPath);
-    if (seen.has(relative)) continue;
     if (entry.isDirectory()) {
-      await collectArtifacts(fullPath, root, protocol, lease, seen, uploaded);
+      await collectArtifacts(fullPath, root, protocol, lease, seen, uploaded, tracesOnly);
       continue;
     }
-    if (!entry.isFile()) continue;
+    if (!entry.isFile() || seen.has(relative)) continue;
+    const finalizedTrace = entry.name.endsWith('.trace') || (isTracePath(relative) && entry.name.endsWith('.zip'));
+    // Live traces appear at browser_start_tracing and stay unreferenced until stop.
+    if (tracesOnly ? !finalizedTrace : isTracePath(relative) || entry.name.endsWith('.trace')) continue;
     const contentType = ARTIFACT_TYPES[path.extname(entry.name).toLowerCase()];
     if (!contentType) continue;
     seen.add(relative);
@@ -184,7 +190,7 @@ export async function finalizeWebAiEvidence({ lease, protocol, session, stepCoun
       }]);
     }
   }
-  const uploaded = await uploadNewArtifacts(outputDir, protocol, lease, seen);
+  const uploaded = await uploadNewArtifacts(outputDir, protocol, lease, seen, { tracesOnly: true });
   const traces = uploaded.filter((file) => file.name.endsWith('.trace') || file.name.endsWith('.zip'));
   const trace = traces.find((file) => file.name.split(path.sep).includes('traces')) || traces[0];
   if (trace) {
