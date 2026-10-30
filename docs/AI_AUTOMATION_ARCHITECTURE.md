@@ -80,8 +80,8 @@ lease includes a snapshot of the linked test case, structured steps, and an
 allowlisted subset of environment metadata; arbitrary environment credentials
 and step data are excluded. The SDK maintains heartbeats, appends immutable
 step observations through the Runtime callback, and reports terminal status and
-token totals idempotently. Production Web/Mobile/API tool implementations remain
-the next deployment boundary.
+token totals idempotently. Web, Mobile, and API production Runner implementations
+use that protocol; live device and external-service acceptance remain deployment boundaries.
 
 ## Web Runner baseline
 
@@ -90,8 +90,8 @@ pins both the Playwright package and official Chromium image to `1.64.1`. Its
 first fixed-script executor supports navigation, click, fill, screenshot, text
 assertions, and visibility assertions, with heartbeat cancellation and evidence
 after each step. It refuses to pass a script with no explicit assertion. AI
-exploration through Playwright MCP and controlled screenshot/Trace upload remain
-open before this Runner is production-ready.
+exploration through Playwright MCP and controlled screenshot/Trace upload use the
+same task lease and evidence protocol.
 
 The Agent Runtime now has a hardened Playwright MCP stdio transport boundary:
 the package reference must be an exact version, the browser is headless and
@@ -117,8 +117,11 @@ MCP process stops, the Web Runner uploads screenshot, Trace, and console-log
 files and stores their artifact references on the evidence rows. A terminal
 report also writes the linked test result, execution record, and test-run
 status. Model calls use the lease-scoped completion endpoint. An expired lease cannot complete,
-renew, or report a pass. Batch regression, CI templates, and a real-browser
-end-to-end run are still open. The Node Web Runner is the production
+renew, or report a pass. Batch regression and CI templates are included. The
+container image has been built and its fixed-script executor has completed a
+real Chromium assertion/screenshot smoke run under the Compose-equivalent
+non-root, read-only, capability-free resource limits. A full authenticated task
+round trip against a deployed backend remains open. The Node Web Runner is the production
 executor; the Python helper follows the same origin and assertion rules.
 
 ## API Runner baseline

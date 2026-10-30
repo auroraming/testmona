@@ -78,6 +78,10 @@ services:
     profiles: ["web-runner"]
     init: true
     ipc: host
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=268435456,uid=1001,gid=1001
+      - /runner/artifacts:rw,nosuid,nodev,size=67108864,uid=1001,gid=1001
     environment:
       - TESTMONA_BACKEND_URL=${TESTMONA_BACKEND_URL:-http://backend:8000}
       - TESTMONA_RUNNER_TOKEN=${TESTMONA_WEB_RUNNER_TOKEN:-}

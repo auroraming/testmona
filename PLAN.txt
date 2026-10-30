@@ -48,7 +48,7 @@ AI 自动化交付阶段：
     - [x] 第五批：Runner 领取任务时获得脱敏的用例、结构化步骤和环境白名单上下文；新增异步 Runner SDK 统一领取、心跳、证据与终态回报，并将 Agent 每一步通过回调实时写入不可变证据链。
   - [ ] 验收：通过统一接口发现并调用内置测试工具；工具调用成功不会自动把用例判为通过。
 - [ ] AI-V1.1：Playwright MCP + Playwright Test + Chromium Web Runner。
-  - [ ] 提供独立 Docker Web Runner，预装兼容版本 Chromium 和系统依赖，具备资源、网络和权限隔离。
+  - [x] 提供独立 Docker Web Runner，预装兼容版本 Chromium 和系统依赖，具备资源、网络和权限隔离。
     - [x] 固定脚本基础：新增独立 Compose profile，Playwright 包与官方 Chromium 镜像共同锁定 1.64.1，使用非 root 用户、移除 Linux capabilities 并配置 CPU/内存上限。
   - [ ] 支持 Web AI 探索、截图/Trace/网络日志采集，以及固定脚本批量回归和 CI 调用。
     - [x] 固定脚本执行器：支持导航、点击、填写、截图、文本/可见性独立断言、逐步证据及心跳取消；没有显式断言时禁止判为通过。
@@ -91,7 +91,7 @@ AI 自动化交付阶段：
 
 - [ ] 完成现有模块复用评估并形成架构决策记录。
 - [ ] 通用 MCP Client 完成探活、发现、调用、参数错误和超时验证。
-- [ ] 预装 Chromium 的 Web Runner 在 Docker 环境启动并完成一次页面测试。
+- [x] 预装 Chromium 的 Web Runner 在 Docker 环境启动并完成一次页面测试。
 - [ ] Playwright Test 固定脚本执行后，断言和证据正确回传 TestMona。
 - [ ] Android/iOS Worker 能注册设备，并验证无设备、设备占用和设备离线提示。
 - [ ] API MCP 候选与原生 HTTP Runner 对同一用例产生一致的结果数据。
@@ -131,6 +131,7 @@ PRD：docs/PRD-用例脑图工作台.md
 实施顺序以以上新版阶段为准；以下旧收尾清单继续跟踪现有功能，重复验收项并入对应新版阶段，OpenAPI 等非脑图事项单独保留。
 
 进度记录：
+- 2026-10-30：完成 Web Runner Docker/Chromium 实机烟测。锁定 Playwright 1.64.1 / Chromium 1248 的镜像成功构建；在 `pwuser`、只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、1 CPU/1 GiB 限制下启动真实 Chromium，文本与可见性 2 个断言及截图证据通过。Compose 固化只读根与限额 tmpfs。完整登录态任务经后端入队、租约、制品回传的端到端仍待专用环境验收。
 - 2026-10-30：OpenAPI/Swagger 固定脚本生成补齐请求数据。必填 path/query 参数会使用规范中的安全示例或基础类型值，`application/json` 请求体与 Swagger 2 body 参数只生成必填的非敏感字段；Header/Cookie 和敏感命名字段仍由凭据引用处理，不复制进脚本。相关 OpenAPI/自动化平台 33 项测试通过。未增加随机数据生成器或可选字段策略。
 - 2026-10-30：API Runner 增加 OpenAPI/Swagger 响应结构断言。脚本生成器会展开本地 `$ref`，把 JSON 响应 Schema 的安全子集写为 `assert_json_schema`；原生 Runner 验证类型、必填字段、属性、数组、枚举和组合规则，只记录匹配结果与错误路径，不把响应正文写入证据。生成端和 Runner 均限制 20 层、500 节点。API Runner 6 项及 OpenAPI/平台服务 21 项测试通过；真实目标 API 端到端验收仍未勾。
 - 2026-10-30：接入最新 AI 自动化平台更新并完成统一回归。后端 AI/Runner/OpenAPI 专项 82 项、三类 Runner 29 项、前端 358 项测试通过，前端生产构建通过；修复 XMind XML 解析使用 `Array.at()` 导致当前 TypeScript 编译目标无法构建的问题。空 SQLite 数据库完整升级到 `add_ai_automation_followup`；真实浏览器、真机和 Docker 端到端验收仍未勾。
