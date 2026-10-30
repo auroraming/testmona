@@ -207,14 +207,15 @@ function decodeXml(value: string) {
 export function parseXMindXml(xml: string): RawSheet[] {
   const sheets: RawSheet[] = [];
   const stack: Array<{ kind: 'sheet' | 'topic' | 'topics' | 'title'; sheet?: RawSheet; topic?: RawTopic; mode?: 'attached' | 'detached' }> = [];
+  const frameFromEnd = (offset = 1) => stack[stack.length - offset];
   const tokens = xml.match(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[A-Za-z0-9:_-]+[^>]*>|[^<]+/g) || [];
   for (const token of tokens) {
     if (token.startsWith('<!--') || token.startsWith('<![CDATA[')) continue;
     if (!token.startsWith('<')) {
-      const current = stack.at(-1);
+      const current = frameFromEnd();
       if (current?.kind === 'title') {
         const text = decodeXml(token).trim();
-        const owner = stack.at(-2);
+        const owner = frameFromEnd(2);
         if (text && owner?.kind === 'topic' && owner.topic) owner.topic.title = text;
         if (text && owner?.kind === 'sheet' && owner.sheet && !owner.sheet.title) owner.sheet.title = text;
       }
@@ -225,10 +226,10 @@ export function parseXMindXml(xml: string): RawSheet[] {
     if (!name) continue;
     if (closing) {
       const kind = name === 'topics' ? 'topics' : name;
-      if (!['sheet', 'topic', 'topics', 'title'].includes(kind) || stack.at(-1)?.kind !== kind) continue;
+      if (!['sheet', 'topic', 'topics', 'title'].includes(kind) || frameFromEnd()?.kind !== kind) continue;
       const frame = stack.pop();
       if (frame?.kind === 'topic' && frame.topic) {
-        const parent = stack.at(-1);
+        const parent = frameFromEnd();
         if (parent?.kind === 'topics' && parent.mode) {
           const owner = [...stack].reverse().find((item) => item.kind === 'topic');
           if (owner?.topic) {
@@ -244,9 +245,9 @@ export function parseXMindXml(xml: string): RawSheet[] {
     }
     const attrs = Object.fromEntries([...token.matchAll(/([A-Za-z0-9:_-]+)="([^"]*)"/g)].map((match) => [match[1].split(':').pop()!.toLowerCase(), decodeXml(match[2])]));
     if (token.endsWith('/>')) {
-      if ((name === 'img' || name === 'image') && stack.at(-1)?.kind === 'topic' && stack.at(-1)?.topic) {
+      if ((name === 'img' || name === 'image') && frameFromEnd()?.kind === 'topic' && frameFromEnd()?.topic) {
         const src = attrs.src || attrs.href;
-        if (src) stack.at(-1)!.topic!.image = { src };
+        if (src) frameFromEnd()!.topic!.image = { src };
       }
       continue;
     }
