@@ -236,6 +236,55 @@ def test_mindmap_json_duplicate_modes_and_validation(client):
     assert "action is required" in invalid_steps.json()["detail"]
 
 
+def test_mindmap_xlsx_template_converts_to_versioned_json(client):
+    template = client.get("/import-export/templates/test-case-mindmap.xlsx")
+    assert template.status_code == 200, template.text
+    assert template.content.startswith(b"PK")
+
+    converted = client.post(
+        f"/import-export/import/test-cases/mindmap-xlsx/convert?test_suite_id={client.suite_id}",
+        files={"file": ("cases.xlsx", template.content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert converted.status_code == 200, converted.text
+    document = converted.json()["document"]
+    assert document["format"] == "testmona.test-case-mindmap"
+    assert document["sections"][0]["children"][0]["name"] == "Refund"
+    assert document["test_cases"][0]["title"] == "Refund a paid order"
+    assert [step["action"] for step in document["test_cases"][0]["steps"]] == ["Open the order", "Submit refund"]
+
+    preview = client.post("/import-export/import/test-cases/mindmap-json", json={
+        "test_suite_id": client.suite_id,
+        "document": document,
+        "dry_run": True,
+    })
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["new_section_count"] == 2
+    assert preview.json()["would_create_count"] == 1
+
+
+def test_mindmap_xlsx_rejects_formula_and_unknown_step_case(client):
+    from io import BytesIO
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    folders = workbook.active
+    folders.title = "Folders"
+    folders.append(("folder_key", "parent_folder_key", "name"))
+    cases = workbook.create_sheet("Test Cases")
+    cases.append(("case_key", "folder_key", "title", "priority", "test_type", "description", "preconditions", "is_multistep"))
+    cases.append(("TC-1", "", "=HYPERLINK(\"https://example.test\")", "medium", "manual", "", "", False))
+    steps = workbook.create_sheet("Steps")
+    steps.append(("case_key", "step_number", "action", "expected_result", "step_type"))
+    buffer = BytesIO()
+    workbook.save(buffer)
+    response = client.post(
+        f"/import-export/import/test-cases/mindmap-xlsx/convert?test_suite_id={client.suite_id}",
+        files={"file": ("bad.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 400
+    assert "formula" in response.json()["detail"]
+
+
 def test_export_roundtrips_multistep_and_flags(client):
     """Exported CSV must re-import cleanly (is_multistep/order_index/dates)."""
     multistep = (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import MindElixir, { type MindElixirData, type MindElixirInstance, type NodeObj } from 'mind-elixir';
 import 'mind-elixir/style.css';
-import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Download, Edit, Expand, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, Upload, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardPaste, Copy, Download, Edit, Expand, FileSpreadsheet, FileText, FolderPlus, Maximize2, Plus, Redo2, Scissors, Trash2, Undo2, Upload, X } from 'lucide-react';
 import { saveAs } from 'file-saver';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -91,6 +91,7 @@ type Props = {
     duplicates: string;
     importInvalid: string;
     testCases: string;
+    downloadXlsxTemplate: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -114,6 +115,8 @@ type Props = {
     dryRun: boolean,
     idempotencyKey: string,
   ) => Promise<MindmapJsonImportResult>;
+  onConvertXlsx: (file: File) => Promise<{ document: Record<string, unknown>; warnings: string[] }>;
+  onDownloadXlsxTemplate: () => Promise<Blob>;
   onOpenCase: (testCaseId: number) => void;
   navigationGuardRef: MutableRefObject<(action: () => void) => void>;
 };
@@ -153,6 +156,8 @@ export function TestCaseMindmapView({
   onCopyNode,
   onDeleteNode,
   onImportJson,
+  onConvertXlsx,
+  onDownloadXlsxTemplate,
   onOpenCase,
   navigationGuardRef,
 }: Props) {
@@ -170,6 +175,7 @@ export function TestCaseMindmapView({
   const [importDocument, setImportDocument] = useState<Record<string, unknown> | null>(null);
   const [importPreview, setImportPreview] = useState<MindmapJsonImportResult | null>(null);
   const [importError, setImportError] = useState('');
+  const [importSourceWarnings, setImportSourceWarnings] = useState<string[]>([]);
   const [duplicateMode, setDuplicateMode] = useState<'skip' | 'copy'>('skip');
   const [importKey, setImportKey] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -795,11 +801,12 @@ export function TestCaseMindmapView({
       setExporting(false);
     }
   };
-  const previewJsonImport = async (document: Record<string, unknown>, mode: 'skip' | 'copy', key: string) => {
+  const previewJsonImport = async (document: Record<string, unknown>, mode: 'skip' | 'copy', key: string, extraWarnings: string[] = []) => {
     setImporting(true);
     setImportError('');
     try {
-      setImportPreview(await onImportJson(document, mode, true, key));
+      const result = await onImportJson(document, mode, true, key);
+      setImportPreview({ ...result, warnings: [...extraWarnings, ...result.warnings] });
     } catch (error) {
       setImportError(error instanceof Error ? error.message : labels.importInvalid);
     } finally {
@@ -812,16 +819,20 @@ export function TestCaseMindmapView({
     setImportError('');
     try {
       if (file.size > 10 * 1024 * 1024) throw new Error(labels.importInvalid);
-      const parsed = JSON.parse(await file.text());
+      const isXlsx = file.name.toLowerCase().endsWith('.xlsx');
+      const converted = isXlsx ? await onConvertXlsx(file) : null;
+      const parsed = converted?.document ?? JSON.parse(await file.text());
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(labels.importInvalid);
       const key = crypto.randomUUID();
       setImportDocument(parsed as Record<string, unknown>);
       setImportKey(key);
       setDuplicateMode('skip');
-      await previewJsonImport(parsed as Record<string, unknown>, 'skip', key);
+      setImportSourceWarnings(converted?.warnings || []);
+      await previewJsonImport(parsed as Record<string, unknown>, 'skip', key, converted?.warnings || []);
     } catch (error) {
       setImportPreview(null);
       setImportDocument(null);
+      setImportSourceWarnings([]);
       setImportError(error instanceof Error ? error.message : labels.importInvalid);
     } finally {
       if (importInputRef.current) importInputRef.current.value = '';
@@ -829,7 +840,18 @@ export function TestCaseMindmapView({
   };
   const changeDuplicateMode = async (mode: 'skip' | 'copy') => {
     setDuplicateMode(mode);
-    if (importDocument) await previewJsonImport(importDocument, mode, importKey);
+    if (importDocument) await previewJsonImport(importDocument, mode, importKey, importSourceWarnings);
+  };
+  const downloadXlsxTemplate = async () => {
+    setImporting(true);
+    try {
+      saveAs(await onDownloadXlsxTemplate(), 'testmona-test-case-template.xlsx');
+    } catch (error) {
+      setImportDialogOpen(true);
+      setImportError(error instanceof Error ? error.message : labels.importInvalid);
+    } finally {
+      setImporting(false);
+    }
   };
   const commitJsonImport = async () => {
     if (!importDocument) return;
@@ -839,6 +861,7 @@ export function TestCaseMindmapView({
       await onImportJson(importDocument, duplicateMode, false, importKey);
       setImportPreview(null);
       setImportDocument(null);
+      setImportSourceWarnings([]);
       setImportDialogOpen(false);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : labels.importInvalid);
@@ -890,8 +913,9 @@ export function TestCaseMindmapView({
           <Button size="icon" variant="ghost" title={labels.fullscreen} onClick={() => void hostRef.current?.requestFullscreen()}><Maximize2 className="h-4 w-4" /></Button>
           <Button size="sm" variant="ghost" onClick={() => void exportJson()} disabled={exporting}><Download className="mr-1 h-4 w-4" />{labels.exportJson}</Button>
           {canWrite && <>
-            <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void selectJsonImport(event.target.files?.[0])} />
+            <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void selectJsonImport(event.target.files?.[0])} />
             <Button size="sm" variant="ghost" onClick={() => importInputRef.current?.click()} disabled={importing}><Upload className="mr-1 h-4 w-4" />{labels.importJson}</Button>
+            <Button size="icon" variant="ghost" title={labels.downloadXlsxTemplate} onClick={() => void downloadXlsxTemplate()} disabled={importing}><FileSpreadsheet className="h-4 w-4" /></Button>
           </>}
           {canWrite && <Button size="sm" variant="ghost" onClick={openSectionDialog}><FolderPlus className="mr-1 h-4 w-4" />{labels.addModule}</Button>}
           {canWrite && <Button size="sm" variant="ghost" onClick={() => onCreateCase(selected?.kind === 'section' ? selected.id : null)}><Plus className="mr-1 h-4 w-4" />{labels.addCase}</Button>}
@@ -899,7 +923,7 @@ export function TestCaseMindmapView({
         </div>
       </div>
 
-      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!importing) { setImportDialogOpen(open); if (!open) { setImportDocument(null); setImportPreview(null); setImportError(''); } } }}>
+      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!importing) { setImportDialogOpen(open); if (!open) { setImportDocument(null); setImportPreview(null); setImportSourceWarnings([]); setImportError(''); } } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{labels.importPreviewTitle}</DialogTitle></DialogHeader>
           {importPreview && <div className="space-y-3 text-sm">
@@ -919,7 +943,7 @@ export function TestCaseMindmapView({
           </div>}
           {importError && <p className="text-sm text-destructive">{importError}</p>}
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportDocument(null); setImportPreview(null); setImportError(''); }} disabled={importing}>{labels.cancel}</Button>
+            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportDocument(null); setImportPreview(null); setImportSourceWarnings([]); setImportError(''); }} disabled={importing}>{labels.cancel}</Button>
             <Button onClick={() => void commitJsonImport()} disabled={!importPreview || importing}>{labels.importConfirm}</Button>
           </DialogFooter>
         </DialogContent>

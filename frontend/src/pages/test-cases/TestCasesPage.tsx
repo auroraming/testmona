@@ -2961,6 +2961,26 @@ export function TestCases() {
     }
   };
 
+  const convertMindmapXlsx = async (file: File) => {
+    if (!currentTestSuiteId) throw new Error(t('mindmapImportInvalid'));
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const response = await api.post(
+        `/import-export/import/test-cases/mindmap-xlsx/convert?test_suite_id=${currentTestSuiteId}`,
+        form,
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(getApiErrorMessage(error, t('mindmapImportInvalid')));
+    }
+  };
+
+  const downloadMindmapXlsxTemplate = async () => {
+    const response = await api.get('/import-export/templates/test-case-mindmap.xlsx', { responseType: 'blob' });
+    return response.data as Blob;
+  };
+
   const openRecycleBin = async () => {
     if (!currentProjectId) return;
     setRecycleBinOpen(true);
@@ -4459,6 +4479,7 @@ export function TestCases() {
                 duplicates: t('mindmapImportDuplicates'),
                 importInvalid: t('mindmapImportInvalid'),
                 testCases: t('testCases'),
+                downloadXlsxTemplate: t('mindmapDownloadXlsxTemplate'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}
@@ -4472,6 +4493,8 @@ export function TestCases() {
               onCopyNode={copyMindmapNode}
               onDeleteNode={deleteMindmapNode}
               onImportJson={importMindmapJson}
+              onConvertXlsx={convertMindmapXlsx}
+              onDownloadXlsxTemplate={downloadMindmapXlsxTemplate}
               onOpenCase={(testCaseId) => mindmapNavigationGuardRef.current(() => navigate(getTestCaseDetailUrl(testCaseId)))}
               navigationGuardRef={mindmapNavigationGuardRef}
             />

@@ -5,6 +5,7 @@ from .import_export_modules.schemas import *
 from .import_export_modules.helpers import *
 from .import_export_modules.test_cases import *
 from .import_export_modules.mindmap_json import *
+from .import_export_modules.mindmap_xlsx import *
 from .import_export_modules.openapi_import import *
 from .import_export_modules.projects import *
 
