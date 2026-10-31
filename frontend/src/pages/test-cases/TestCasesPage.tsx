@@ -2970,7 +2970,7 @@ export function TestCases() {
       }
       return response.data;
     } catch (error) {
-      throw new Error(getApiErrorMessage(error, t('mindmapImportInvalid')));
+      throw Object.assign(new Error(getApiErrorMessage(error, t('mindmapImportInvalid'))), { cause: error });
     }
   };
 
@@ -2985,7 +2985,7 @@ export function TestCases() {
       );
       return response.data;
     } catch (error) {
-      throw new Error(getApiErrorMessage(error, t('mindmapImportInvalid')));
+      throw Object.assign(new Error(getApiErrorMessage(error, t('mindmapImportInvalid'))), { cause: error });
     }
   };
 
@@ -4474,6 +4474,7 @@ export function TestCases() {
 
           {viewMode === 'mindmap' && currentTestSuiteId ? (
             <TestCaseMindmapView
+              projectId={currentProjectId!}
               suiteId={currentTestSuiteId}
               suiteName={currentSuiteName}
               sections={mindmapSections}

@@ -11,3 +11,4 @@ export * from "./api/management_search";
 export * from "./api/inbox";
 export * from "./api/mindmaps";
 export * from "./api/ai_automation";
+export * from "./api/test_case_reviews";

@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { TestCase } from '@/types';
 import type { Section } from '@/types/testCases';
 import { TestCaseImages } from './TestCaseImages';
+import { TestCaseReviewPanel } from './TestCaseReviewPanel';
+import { getReviewCaseIds } from './testCaseReviewUtils';
 
 type SelectedNode = {
   kind: 'suite' | 'section' | 'case' | 'field' | 'step';
@@ -47,6 +49,7 @@ const emptyCaseDraft: CaseDraft = { description: '', preconditions: '', steps: '
 const CASE_BATCH_SIZE = 500;
 
 type Props = {
+  projectId: number;
   suiteId: number;
   suiteName: string;
   sections: Section[];
@@ -142,6 +145,7 @@ const mindNodeId = (node: SelectedNode) => node.kind === 'suite'
       : caseNodeId(node.id);
 
 export function TestCaseMindmapView({
+  projectId,
   suiteId,
   suiteName,
   sections,
@@ -231,6 +235,10 @@ export function TestCaseMindmapView({
   const selectedCaseId = selected?.kind === 'case' ? selected.id : (selected?.kind === 'field' || selected?.kind === 'step') ? selected.caseId : undefined;
   const selectedCase = selectedCaseId ? testCases.find((testCase) => testCase.id === selectedCaseId) : undefined;
   const visibleTestCases = useMemo(() => testCases.slice(0, visibleCaseLimit), [testCases, visibleCaseLimit]);
+  const reviewCaseIds = useMemo(
+    () => getReviewCaseIds(selected, selectedCaseId, sections, testCases),
+    [sections, selected, selectedCaseId, testCases],
+  );
 
   useEffect(() => {
     if (!selectedCase) return;
@@ -1030,6 +1038,13 @@ export function TestCaseMindmapView({
                 {canWrite && <Button className="w-full" onClick={() => void saveCaseDetails()} disabled={saving || !isDirty}><FileText className="mr-2 h-4 w-4" />{labels.saveDetails}</Button>}
               </div>
             )}
+            <TestCaseReviewPanel
+              projectId={projectId}
+              suiteId={suiteId}
+              testCaseIds={reviewCaseIds}
+              targetLabel={selected.title}
+              canWrite={canWrite}
+            />
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="outline" className="w-full" onClick={openRenameDialog}><Edit className="mr-2 h-4 w-4" />{labels.rename}</Button>}
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={() => setClipboard({ mode: 'copy', node: selected as ActionNode })}><Copy className="mr-2 h-4 w-4" />{labels.copy}</Button>
