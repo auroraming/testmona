@@ -14,6 +14,7 @@ import type { Section } from '@/types/testCases';
 import { TestCaseImages } from './TestCaseImages';
 import { TestCaseReviewPanel } from './TestCaseReviewPanel';
 import { TestCaseRunPanel } from './TestCaseRunPanel';
+import { TestCaseCrossProjectCopyPanel } from './TestCaseCrossProjectCopyPanel';
 import { getReviewCaseIds } from './testCaseReviewUtils';
 import type { TestResult } from '@/types';
 
@@ -1068,6 +1069,7 @@ export function TestCaseMindmapView({
               canWrite={canWrite}
               onResultsChange={setRunStatuses}
             />
+            {canWrite && <TestCaseCrossProjectCopyPanel projectId={projectId} testCaseIds={reviewCaseIds} />}
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="outline" className="w-full" onClick={openRenameDialog}><Edit className="mr-2 h-4 w-4" />{labels.rename}</Button>}
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={() => setClipboard({ mode: 'copy', node: selected as ActionNode })}><Copy className="mr-2 h-4 w-4" />{labels.copy}</Button>

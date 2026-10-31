@@ -8,6 +8,7 @@ from .test_management_analysis import register_analysis_routes
 from .test_management_results import register_result_routes
 from .test_case_images import register_test_case_image_routes
 from .test_case_reviews import register_test_case_review_routes
+from .test_case_cross_project_copy import register_test_case_cross_project_copy_routes
 
 
 def register_test_management_routes(app):
@@ -19,3 +20,4 @@ def register_test_management_routes(app):
     register_result_routes(app)
     register_test_case_image_routes(app)
     register_test_case_review_routes(app)
+    register_test_case_cross_project_copy_routes(app)
