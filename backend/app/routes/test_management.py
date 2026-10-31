@@ -7,6 +7,7 @@ from .test_management_sections_steps import register_section_step_routes
 from .test_management_analysis import register_analysis_routes
 from .test_management_results import register_result_routes
 from .test_case_images import register_test_case_image_routes
+from .test_case_reviews import register_test_case_review_routes
 
 
 def register_test_management_routes(app):
@@ -17,3 +18,4 @@ def register_test_management_routes(app):
     register_analysis_routes(app)
     register_result_routes(app)
     register_test_case_image_routes(app)
+    register_test_case_review_routes(app)

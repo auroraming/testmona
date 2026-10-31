@@ -177,6 +177,77 @@ class TestCaseImage(Base):
     test_step = relationship("TestCaseStep", back_populates="images")
     uploader = relationship("User", foreign_keys=[uploaded_by])
 
+
+class TestCaseReviewTask(Base):
+    __tablename__ = "test_case_review_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    test_suite_id = Column(Integer, ForeignKey("test_suites.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    mode = Column(String(20), nullable=False, default="single")
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    due_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    suite = relationship("TestSuite")
+    requester = relationship("User", foreign_keys=[requested_by])
+    rounds = relationship(
+        "TestCaseReviewRound", back_populates="task", cascade="all, delete-orphan",
+        order_by="TestCaseReviewRound.id",
+    )
+
+
+class TestCaseReviewRound(Base):
+    __tablename__ = "test_case_review_rounds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("test_case_review_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    test_case_id = Column(Integer, ForeignKey("test_cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    round_number = Column(Integer, nullable=False)
+    revision_number = Column(Integer, nullable=False, default=0)
+    snapshot = Column(JSON, nullable=False)
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    submitted_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime(timezone=True))
+
+    task = relationship("TestCaseReviewTask", back_populates="rounds")
+    test_case = relationship("TestCase")
+    submitter = relationship("User", foreign_keys=[submitted_by])
+    assignments = relationship(
+        "TestCaseReviewAssignment", back_populates="round", cascade="all, delete-orphan",
+        order_by="TestCaseReviewAssignment.id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "test_case_id", "round_number", name="uq_test_case_review_round"),
+    )
+
+
+class TestCaseReviewAssignment(Base):
+    __tablename__ = "test_case_review_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    round_id = Column(Integer, ForeignKey("test_case_review_rounds.id", ondelete="CASCADE"), nullable=False, index=True)
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    decision = Column(String(30), nullable=False, default="pending")
+    comment = Column(String(2000))
+    has_suggestion = Column(Boolean, nullable=False, default=False)
+    decided_at = Column(DateTime(timezone=True))
+    removed_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    round = relationship("TestCaseReviewRound", back_populates="assignments")
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+
+    __table_args__ = (
+        UniqueConstraint("round_id", "reviewer_id", name="uq_test_case_review_assignment"),
+    )
+
 class TestCaseRevision(Base):
     __tablename__ = "test_case_revisions"
 
