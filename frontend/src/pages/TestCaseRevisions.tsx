@@ -48,6 +48,7 @@ interface TestCase {
   expected_result?: string;
   priority?: string;
   tags?: string;
+  updated_at?: string;
   test_suite?: {
     id: number;
     project_id: number;
@@ -196,7 +197,8 @@ export function TestCaseRevisions() {
 
     setRestoringRevisionNumber(revision.revision_number);
     try {
-      await restoreRevision.mutateAsync(revision.revision_number);
+      if (!currentTestCase?.updated_at) throw new Error(t('testCaseConcurrencyConflict'));
+      await restoreRevision.mutateAsync({ revisionNumber: revision.revision_number, expectedUpdatedAt: currentTestCase.updated_at });
       toast({ title: t('success'), description: t('revisionRestored') });
     } catch (restoreError: unknown) {
       toast({

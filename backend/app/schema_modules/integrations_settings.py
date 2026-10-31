@@ -543,6 +543,10 @@ class TestCaseRevisionCreate(TestCaseRevisionBase):
     created_by: int
 
 
+class TestCaseRevisionRestore(BaseModel):
+    expected_updated_at: datetime
+
+
 class TestCaseRevision(TestCaseRevisionBase):
     id: int
     test_case_id: int

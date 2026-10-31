@@ -27,8 +27,8 @@ export function useTestCaseRevisions(testCaseId: number | null, enabled: boolean
 export function useRestoreRevision(testCaseId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (revisionNumber: number) =>
-      api.post(`/test-cases/${testCaseId}/revisions/${revisionNumber}/restore`),
+    mutationFn: ({ revisionNumber, expectedUpdatedAt }: { revisionNumber: number; expectedUpdatedAt: string }) =>
+      api.post(`/test-cases/${testCaseId}/revisions/${revisionNumber}/restore`, { expected_updated_at: expectedUpdatedAt }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: testCaseRevisionKeys.detail(testCaseId) }),
   });
 }

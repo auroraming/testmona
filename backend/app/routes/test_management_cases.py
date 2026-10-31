@@ -860,6 +860,7 @@ def register_case_routes(app):
     def restore_test_case_revision(
         test_case_id: int,
         revision_number: int,
+        restore: schemas.TestCaseRevisionRestore,
         db: Session = Depends(get_db),
         current_user: schemas.User = Depends(get_current_active_user),
     ):
@@ -874,6 +875,9 @@ def register_case_routes(app):
         db_test_case = crud.get_test_case(db, test_case_id=test_case_id)
         if not db_test_case or getattr(db_test_case, "is_deleted", False):
             raise HTTPException(status_code=404, detail="Test case not found")
+        current_updated_at = db_test_case.updated_at
+        if current_updated_at is None or abs((current_updated_at.replace(tzinfo=None) - restore.expected_updated_at.replace(tzinfo=None)).total_seconds()) > 0.001:
+            raise HTTPException(status_code=409, detail="Test case was modified by another user")
 
         test_suite = crud.get_test_suite(db, test_suite_id=db_test_case.test_suite_id)
         if test_suite and not rbac.has_permission(current_user, "write", test_suite.project_id, db):
