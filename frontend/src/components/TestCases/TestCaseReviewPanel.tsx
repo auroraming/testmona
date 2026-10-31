@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ClipboardCheck, Clock, Loader2, MessageSquare, RotateCcw, XCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardCheck, Clock, Loader2, MessageSquare, RotateCcw, Users, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -45,6 +45,8 @@ export function TestCaseReviewPanel({ projectId, suiteId, testCaseIds, targetLab
   const [changesRound, setChangesRound] = useState<TestCaseReviewRound | null>(null);
   const [comment, setComment] = useState('');
   const [hasSuggestion, setHasSuggestion] = useState(false);
+  const [editAssignment, setEditAssignment] = useState<{ task: TestCaseReviewTask; round: TestCaseReviewRound } | null>(null);
+  const [editReviewers, setEditReviewers] = useState<number[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,7 +141,26 @@ export function TestCaseReviewPanel({ projectId, suiteId, testCaseIds, targetLab
     }
   };
 
+  const saveReviewers = async () => {
+    if (!editAssignment || !editReviewers.length) return;
+    setBusy(true);
+    try {
+      await testCaseReviewsAPI.updateReviewers(editAssignment.round.id, editReviewers);
+      setEditAssignment(null);
+      toast({ title: t('testCaseReviewReviewersUpdated') });
+      await load();
+    } catch (error) {
+      toast({ title: t('error'), description: getApiErrorMessage(error, t('failedToSave')), variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const statusLabel = (status: TestCaseReviewStatus) => t(`testCaseReviewStatus_${status}` as any);
+  const reviewerLabel = (reviewerId: number) => {
+    const member = members.find((item) => item.user_id === reviewerId);
+    return member?.full_name || member?.username || `#${reviewerId}`;
+  };
 
   return (
     <div className="space-y-3 border-t pt-4">
@@ -154,7 +175,7 @@ export function TestCaseReviewPanel({ projectId, suiteId, testCaseIds, targetLab
         const rounds = getCurrentReviewRounds(task).filter((round) => selectedIds.has(round.test_case_id));
         return <div key={task.id} className="space-y-2 rounded-md border p-3">
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0"><p className="truncate text-sm font-medium">{task.name}</p><p className="text-xs text-muted-foreground">{task.mode === 'single' ? t('testCaseReviewSingle') : t('testCaseReviewMultiple')} · {rounds.length}</p></div>
+            <div className="min-w-0"><p className="truncate text-sm font-medium">{task.name}</p><p className="text-xs text-muted-foreground">{task.mode === 'single' ? t('testCaseReviewSingle') : t('testCaseReviewMultiple')} · {rounds.length}{task.due_at ? ` · ${t('testCaseReviewDueAt')} ${new Date(task.due_at).toLocaleString()}` : ''}</p></div>
             <Badge className={`border-0 ${statusTone[task.status]}`}>{statusLabel(task.status)}</Badge>
           </div>
           {rounds.map((round) => {
@@ -165,13 +186,24 @@ export function TestCaseReviewPanel({ projectId, suiteId, testCaseIds, targetLab
                 {round.status === 'approved' ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : round.status === 'changes_requested' ? <XCircle className="h-3.5 w-3.5 text-amber-600" /> : <Clock className="h-3.5 w-3.5 text-violet-600" />}
                 <span>{statusLabel(round.status)}</span><span className="text-muted-foreground">· v{round.revision_number}</span>
               </div>
+              {canWrite && round.status === 'pending' && <Button size="sm" variant="ghost" className="mt-1 h-7 px-1.5 text-xs" onClick={() => {
+                setEditAssignment({ task, round });
+                setEditReviewers(round.assignments.filter((assignment) => assignment.is_active).map((assignment) => assignment.reviewer_id));
+              }}><Users className="mr-1 h-3.5 w-3.5" />{t('testCaseReviewManageReviewers')}</Button>}
               {mine?.decision === 'pending' && <div className="mt-2 flex gap-1.5">
                 <Button size="sm" className="h-7 text-xs" onClick={() => void decide(round, 'approved')} disabled={busy}><CheckCircle2 className="mr-1 h-3.5 w-3.5" />{t('testCaseReviewApprove')}</Button>
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setChangesRound(round); setComment(''); }} disabled={busy}><MessageSquare className="mr-1 h-3.5 w-3.5" />{t('testCaseReviewRequestChanges')}</Button>
               </div>}
-              {round.assignments.filter((assignment) => assignment.is_active && assignment.comment).map((assignment) => <p key={assignment.id} className="mt-2 whitespace-pre-wrap text-muted-foreground">{assignment.comment}{assignment.has_suggestion ? ` · ${t('testCaseReviewHasSuggestion')}` : ''}</p>)}
+              {round.assignments.filter((assignment) => assignment.comment).map((assignment) => <p key={assignment.id} className="mt-2 whitespace-pre-wrap text-muted-foreground"><span className="font-medium">{reviewerLabel(assignment.reviewer_id)}:</span> {assignment.comment}{assignment.has_suggestion ? ` · ${t('testCaseReviewHasSuggestion')}` : ''}{!assignment.is_active ? ` · ${t('testCaseReviewRemovedReviewer')}` : ''}</p>)}
             </div>;
           })}
+          {task.rounds.some((round) => selectedIds.has(round.test_case_id) && !rounds.some((current) => current.id === round.id)) && <details className="text-xs">
+            <summary className="cursor-pointer text-muted-foreground">{t('testCaseReviewHistory')}</summary>
+            <div className="mt-2 space-y-2">{task.rounds.filter((round) => selectedIds.has(round.test_case_id) && !rounds.some((current) => current.id === round.id)).map((round) => <div key={round.id} className="rounded border p-2">
+              <div className="flex justify-between gap-2"><span className="font-medium">{round.test_case_title} · #{round.round_number}</span><span>{statusLabel(round.status)}</span></div>
+              {round.assignments.map((assignment) => <p key={assignment.id} className="mt-1 text-muted-foreground">{reviewerLabel(assignment.reviewer_id)} · {statusLabel(assignment.decision === 'pending' ? 'pending' : assignment.decision)}{assignment.comment ? ` · ${assignment.comment}` : ''}{!assignment.is_active ? ` · ${t('testCaseReviewRemovedReviewer')}` : ''}</p>)}
+            </div>)}</div>
+          </details>}
           {canWrite && rounds.some((round) => round.status !== 'pending') && <Button size="sm" variant="ghost" className="h-7 w-full text-xs" onClick={() => void rereview(task)} disabled={busy}><RotateCcw className="mr-1 h-3.5 w-3.5" />{t('testCaseReviewRereview')}</Button>}
         </div>;
       })}
@@ -195,6 +227,23 @@ export function TestCaseReviewPanel({ projectId, suiteId, testCaseIds, targetLab
           <Textarea value={comment} onChange={(event) => setComment(event.target.value)} maxLength={2000} rows={4} />
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={hasSuggestion} onChange={(event) => setHasSuggestion(event.target.checked)} />{t('testCaseReviewHasSuggestion')}</label>
           <DialogFooter><Button variant="outline" onClick={() => setChangesRound(null)} disabled={busy}>{t('cancel')}</Button><Button onClick={() => changesRound && void decide(changesRound, 'changes_requested')} disabled={busy || !comment.trim()}>{t('testCaseReviewSubmit')}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editAssignment} onOpenChange={(open) => !busy && !open && setEditAssignment(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{t('testCaseReviewManageReviewers')}</DialogTitle></DialogHeader>
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
+            {members.map((member) => {
+              const selected = editReviewers.includes(member.user_id);
+              return <button type="button" key={member.user_id} className={`w-full rounded px-2 py-1.5 text-left text-sm ${selected ? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200' : 'hover:bg-muted'}`} onClick={() => {
+                if (editAssignment?.task.mode === 'single') setEditReviewers([member.user_id]);
+                else setEditReviewers((current) => selected ? current.filter((id) => id !== member.user_id) : [...current, member.user_id]);
+              }}>{member.full_name || member.username}</button>;
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">{t('testCaseReviewReviewerHistoryHint')}</p>
+          <DialogFooter><Button variant="outline" onClick={() => setEditAssignment(null)} disabled={busy}>{t('cancel')}</Button><Button onClick={() => void saveReviewers()} disabled={busy || !editReviewers.length}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('save')}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

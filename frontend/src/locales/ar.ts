@@ -5106,4 +5106,9 @@ export const ar = {
     testCaseReviewHasSuggestion: 'يتضمن اقتراحًا',
     testCaseReviewRereview: 'إنشاء جولة مراجعة جديدة',
     testCaseReviewSubmit: 'إرسال القرار',
+    testCaseReviewManageReviewers: 'إدارة المراجعين',
+    testCaseReviewReviewersUpdated: 'تم تحديث المراجعين.',
+    testCaseReviewReviewerHistoryHint: 'تظل تعليقات المراجعين المُزالين في السجل ولا تدخل في النتيجة الحالية.',
+    testCaseReviewRemovedReviewer: 'مراجع مُزال',
+    testCaseReviewHistory: 'جولات المراجعة السابقة',
 };

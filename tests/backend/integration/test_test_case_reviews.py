@@ -61,6 +61,20 @@ def test_multi_reviewer_task_preserves_snapshot_and_rolls_up_status(client):
 
     with client.SessionLocal() as db:
         from app import models
+        notifications = db.query(models.Notification).filter(
+            models.Notification.category == "review",
+            models.Notification.related_entity_type == "test_case_review_task",
+            models.Notification.related_entity_id == task["id"],
+        ).all()
+        assert {row.user_id for row in notifications} == {client.member_id, reviewer_id}
+        audit = db.query(models.AuditTrail).filter(
+            models.AuditTrail.project_id == client.project_id,
+            models.AuditTrail.action == models.AuditAction.CREATE,
+        ).one()
+        assert audit.additional_metadata["review_task_id"] == task["id"]
+
+    with client.SessionLocal() as db:
+        from app import models
         case = db.query(models.TestCase).filter(models.TestCase.id == first_id).one()
         case.description = "Changed after submission"
         db.commit()
@@ -82,6 +96,17 @@ def test_multi_reviewer_task_preserves_snapshot_and_rolls_up_status(client):
     current = next(item for item in body["rounds"] if item["id"] == first_round["id"])
     assert current["status"] == "changes_requested"
     assert current["snapshot"]["description"] == "Original description"
+    with client.SessionLocal() as db:
+        from app import models
+        assert db.query(models.Notification).filter(
+            models.Notification.user_id == 1,
+            models.Notification.related_entity_type == "test_case_review_task",
+            models.Notification.related_entity_id == task["id"],
+        ).count() == 2
+        assert db.query(models.AuditTrail).filter(
+            models.AuditTrail.project_id == client.project_id,
+            models.AuditTrail.action.in_([models.AuditAction.APPROVE, models.AuditAction.REJECT]),
+        ).count() == 2
 
 
 def test_reviewer_changes_keep_history_and_rereview_creates_new_round(client):

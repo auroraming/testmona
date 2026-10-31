@@ -5103,4 +5103,9 @@ export const fa = {
     testCaseReviewHasSuggestion: 'دارای پیشنهاد',
     testCaseReviewRereview: 'ایجاد دور جدید بازبینی',
     testCaseReviewSubmit: 'ثبت تصمیم',
+    testCaseReviewManageReviewers: 'مدیریت بازبین‌ها',
+    testCaseReviewReviewersUpdated: 'بازبین‌ها به‌روزرسانی شدند.',
+    testCaseReviewReviewerHistoryHint: 'نظر بازبین حذف‌شده در تاریخچه می‌ماند اما در نتیجه فعلی محاسبه نمی‌شود.',
+    testCaseReviewRemovedReviewer: 'بازبین حذف‌شده',
+    testCaseReviewHistory: 'دورهای قبلی بازبینی',
 };

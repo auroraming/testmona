@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import models, rbac, schemas
 from ..auth import get_current_active_user
 from ..database import get_db
+from ..services import notification_engine
 
 
 class ReviewTaskCreate(BaseModel):
@@ -149,6 +150,42 @@ def _get_task(db: Session, task_id: int, user: models.User, permission: str = "r
     return task
 
 
+def _audit(db: Session, user: models.User, task: models.TestCaseReviewTask, action: models.AuditAction,
+           description: str, **metadata) -> None:
+    """Best-effort audit through the existing project audit service."""
+    try:
+        from ..schemas_audit import AuditTrailCreate
+        from ..services.audit_service import get_audit_service
+
+        get_audit_service(db).create_audit_trail(AuditTrailCreate(
+            user_id=user.id,
+            action=action,
+            entity_type=models.EntityType.TEST_SUITE,
+            entity_id=task.test_suite_id,
+            project_id=task.project_id,
+            description=description,
+            additional_metadata={"review_task_id": task.id, **metadata},
+        ))
+    except Exception:
+        # Auditing is configurable and best-effort throughout the application;
+        # an unavailable audit sink must not undo a completed review action.
+        db.rollback()
+
+
+def _notify_reviewers(db: Session, task: models.TestCaseReviewTask, reviewer_ids: list[int],
+                      actor: models.User, *, title: str, message: str) -> None:
+    notification_engine.emit(
+        db,
+        category=notification_engine.REVIEW,
+        user_ids=reviewer_ids,
+        actor_id=actor.id,
+        title=title,
+        message=message,
+        related_entity_type="test_case_review_task",
+        related_entity_id=task.id,
+    )
+
+
 def register_test_case_review_routes(app) -> None:
     @app.post("/test-case-review-tasks", status_code=201)
     def create_review_task(payload: ReviewTaskCreate, db: Session = Depends(get_db),
@@ -189,6 +226,17 @@ def register_test_case_review_routes(app) -> None:
             for reviewer_id in reviewer_ids:
                 db.add(models.TestCaseReviewAssignment(round_id=round_.id, reviewer_id=reviewer_id))
         db.commit()
+        task = _get_task(db, task.id, current_user)
+        _notify_reviewers(
+            db, task, reviewer_ids, current_user,
+            title="Test case review requested",
+            message=f'{notification_engine.actor_display_name(current_user)} requested your review of "{task.name}".',
+        )
+        _audit(
+            db, current_user, task, models.AuditAction.CREATE,
+            f"Test case review task created: {task.name}",
+            test_case_ids=case_ids, reviewer_ids=reviewer_ids, mode=task.mode,
+        )
         return _view(_get_task(db, task.id, current_user))
 
     @app.get("/test-case-review-tasks")
@@ -226,6 +274,29 @@ def register_test_case_review_routes(app) -> None:
         _recompute_round(round_)
         _recompute(round_.task)
         db.commit()
+        task = _get_task(db, round_.task_id, current_user)
+        notification_engine.emit(
+            db,
+            category=notification_engine.REVIEW,
+            user_ids=[task.requested_by],
+            actor_id=current_user.id,
+            title="Test case review updated",
+            message=(
+                f'{notification_engine.actor_display_name(current_user)} approved "{round_.snapshot.get("title", "Test case")}".'
+                if payload.decision == "approved"
+                else f'{notification_engine.actor_display_name(current_user)} requested changes on "{round_.snapshot.get("title", "Test case")}".'
+            ),
+            related_entity_type="test_case_review_task",
+            related_entity_id=task.id,
+            type_override=(notification_engine.NotificationType.SUCCESS if payload.decision == "approved" else notification_engine.NotificationType.WARNING),
+        )
+        _audit(
+            db, current_user, task,
+            models.AuditAction.APPROVE if payload.decision == "approved" else models.AuditAction.REJECT,
+            f"Test case review decision: {payload.decision}",
+            round_id=round_.id, test_case_id=round_.test_case_id,
+            has_suggestion=payload.has_suggestion,
+        )
         return _view(_get_task(db, round_.task_id, current_user))
 
     @app.put("/test-case-review-rounds/{round_id}/reviewers")
@@ -244,6 +315,7 @@ def register_test_case_review_routes(app) -> None:
         _reviewers(db, reviewer_ids, round_.task.project_id)
         now = datetime.now(timezone.utc)
         existing = {item.reviewer_id: item for item in round_.assignments}
+        added_ids = [reviewer_id for reviewer_id in reviewer_ids if reviewer_id not in existing or not existing[reviewer_id].is_active]
         for item in round_.assignments:
             if item.reviewer_id not in reviewer_ids and item.is_active:
                 item.is_active = False
@@ -260,6 +332,18 @@ def register_test_case_review_routes(app) -> None:
         _recompute_round(round_)
         _recompute(round_.task)
         db.commit()
+        task = _get_task(db, round_.task_id, current_user)
+        if added_ids:
+            _notify_reviewers(
+                db, task, added_ids, current_user,
+                title="Test case review assigned",
+                message=f'{notification_engine.actor_display_name(current_user)} assigned you to "{task.name}".',
+            )
+        _audit(
+            db, current_user, task, models.AuditAction.ASSIGN,
+            f"Test case review reviewers updated: {task.name}",
+            round_id=round_.id, reviewer_ids=reviewer_ids,
+        )
         return _view(_get_task(db, round_.task_id, current_user))
 
     @app.post("/test-case-review-tasks/{task_id}/rereview", status_code=201)
@@ -295,4 +379,20 @@ def register_test_case_review_routes(app) -> None:
         db.flush()
         _recompute(task)
         db.commit()
+        task = _get_task(db, task.id, current_user)
+        rereview_reviewer_ids = sorted({
+            assignment.reviewer_id
+            for round_ in task.rounds
+            if round_.test_case_id in selected and round_.round_number == current[round_.test_case_id].round_number + 1
+            for assignment in round_.assignments if assignment.is_active
+        })
+        _notify_reviewers(
+            db, task, rereview_reviewer_ids, current_user,
+            title="Test case re-review requested",
+            message=f'{notification_engine.actor_display_name(current_user)} opened a new round for "{task.name}".',
+        )
+        _audit(
+            db, current_user, task, models.AuditAction.UPDATE,
+            f"Test case review task resubmitted: {task.name}", test_case_ids=selected,
+        )
         return _view(_get_task(db, task.id, current_user))

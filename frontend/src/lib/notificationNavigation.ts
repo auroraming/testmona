@@ -28,6 +28,10 @@ export async function resolveNotificationTarget(
     case "test_case":
     case "test_case_change":
       return `/test-cases/${id}`;
+    case "test_case_review_task": {
+      const { data } = await api.get(`/test-case-review-tasks/${id}`);
+      return `/projects/${data.project_id}/test-cases`;
+    }
     case "test_plan":
     case "test_plan_change": {
       const { data } = await api.get(`/test-plans/${id}`);
