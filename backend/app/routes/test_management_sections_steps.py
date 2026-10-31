@@ -12,6 +12,7 @@ from ..database import get_db
 from ..auth import get_current_active_user, get_current_user
 from ..models import TestCase, TestResult, TestRun, User, TestCaseRevision, ResultStatus, canonical_result_status
 from .test_management_helpers import *
+from ..services.test_case_review_service import mark_review_required
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +228,10 @@ def register_section_step_routes(app):
 
         # Multistep steps live in their own table, so changes here don't flow
         # through the test-case PUT revision logic; record one explicitly.
-        if _steps_signature(created_steps) != before_signature:
+        steps_changed = _steps_signature(created_steps) != before_signature
+        if steps_changed:
+            updated_case = crud.get_test_case(db, test_case_id=test_case_id)
             try:
-                updated_case = crud.get_test_case(db, test_case_id=test_case_id)
                 revision_data = {
                     "test_case_id": test_case_id,
                     "title": updated_case.title,
@@ -248,6 +250,8 @@ def register_section_step_routes(app):
             except Exception:
                 logger.exception("Failed to create revision for test case steps %s", test_case_id)
 
+            mark_review_required(db, updated_case, "content:steps")
+
         return created_steps
 
     @app.put("/test-case-steps/{step_id}", response_model=schemas.TestCaseStep)
@@ -265,7 +269,12 @@ def register_section_step_routes(app):
         if not rbac.has_permission(current_user, "write", test_case.project_id, db):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         
-        return crud.update_test_case_step(db, step_id=step_id, step=step)
+        before = (db_step.action, db_step.expected_result, db_step.step_type, db_step.data)
+        updated = crud.update_test_case_step(db, step_id=step_id, step=step)
+        after = (updated.action, updated.expected_result, updated.step_type, updated.data)
+        if before != after:
+            mark_review_required(db, test_case, "content:steps")
+        return updated
 
     @app.delete("/test-case-steps/{step_id}", response_model=schemas.MessageResponse)
     def delete_test_case_step_endpoint(
@@ -282,6 +291,7 @@ def register_section_step_routes(app):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         
         crud.delete_test_case_step(db, step_id=step_id)
+        mark_review_required(db, test_case, "content:steps")
         return {"message": "Test case step deleted successfully"}
 
     @app.get("/sections/", response_model=List[schemas.TestCaseSection],

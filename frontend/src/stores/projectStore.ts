@@ -10,6 +10,7 @@ export interface Project {
   owner_name?: string;
   /** Per-project feature toggles; missing keys default to enabled. */
   features?: Record<string, boolean> | null;
+  test_case_review_on_content_change?: boolean;
   created_at: string;
   updated_at?: string;
   test_suites_count?: number;

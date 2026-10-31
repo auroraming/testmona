@@ -13,6 +13,7 @@ class Project(Base):
     # enabled (see app.features). Lets admins/owners hide modules a project
     # doesn't use (Doc Hub, Ask AI, Reports, ...).
     features = Column(JSON, nullable=True)
+    test_case_review_on_content_change = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -100,6 +101,9 @@ class TestCase(Base):
     order_index = Column(Integer, default=0)
     is_deleted = Column(Boolean, default=False)
     is_multistep = Column(Boolean, default=False)  # Flag to indicate multistep format
+    review_required = Column(Boolean, nullable=False, default=False, server_default="0")
+    review_required_at = Column(DateTime(timezone=True))
+    review_required_reason = Column(String(100))
     # Optional reusable data set this case iterates over during a run. When set,
     # the execution screen walks the tester through each dataset row, substituting
     # ${param} placeholders in step text. SET NULL so deleting a dataset detaches.

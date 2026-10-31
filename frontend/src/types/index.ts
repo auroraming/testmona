@@ -22,6 +22,9 @@ export interface Project {
   status: 'active' | 'inactive' | 'archived';
   created_at: string;
   updated_at?: string;
+  owner_id?: number | null;
+  features?: Record<string, boolean> | null;
+  test_case_review_on_content_change?: boolean;
 }
 
 export interface TestSuite {
@@ -70,6 +73,9 @@ export interface TestCase {
   created_at: string;
   updated_at?: string;
   is_multistep?: boolean;
+  review_required?: boolean;
+  review_required_at?: string | null;
+  review_required_reason?: string | null;
   test_steps?: Array<{
     id?: number;
     step_number: number;

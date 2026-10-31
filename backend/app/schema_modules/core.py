@@ -72,6 +72,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[Status] = None
     owner_id: Optional[int] = None
+    test_case_review_on_content_change: Optional[bool] = None
 
     @field_validator('name')
     @classmethod
@@ -117,6 +118,7 @@ class Project(ProjectBase):
     id: int
     owner_id: Optional[int] = None
     features: Optional[Dict[str, bool]] = None
+    test_case_review_on_content_change: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -340,6 +342,9 @@ class TestCase(TestCaseBase):
     created_by: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    review_required: bool = False
+    review_required_at: Optional[datetime] = None
+    review_required_reason: Optional[str] = None
     tags: List[TagOut] = []  # response: full tag objects (overrides the input List[str])
 
     class Config:
@@ -424,6 +429,9 @@ class TestCaseWithRelations(TestCaseBase):
     created_by: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    review_required: bool = False
+    review_required_at: Optional[datetime] = None
+    review_required_reason: Optional[str] = None
     tags: List[TagOut] = []  # response: full tag objects (overrides the input List[str])
     test_suite: Optional[TestSuiteNested] = None
     section: Optional[TestCaseSectionNested] = None

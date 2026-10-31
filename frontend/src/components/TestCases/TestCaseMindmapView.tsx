@@ -99,6 +99,7 @@ type Props = {
     testCases: string;
     downloadXlsxTemplate: string;
     exportXlsx: string;
+    reviewRequired: string;
   };
   priorityOptions: Array<{ value: string; label: string }>;
   onCreateSection: (parentSectionId: number | null, name: string) => Promise<void>;
@@ -441,6 +442,7 @@ export function TestCaseMindmapView({
         testCase.project_seq ? `TC-${testCase.project_seq}` : `#${testCase.id}`,
         testCase.priority,
         ...(imageCounts[testCase.id] ? [`🖼 ${imageCounts[testCase.id]}`] : []),
+        ...(testCase.review_required ? [`↻ ${labels.reviewRequired}`] : []),
       ],
       metadata: {
         kind: 'case',
@@ -465,7 +467,14 @@ export function TestCaseMindmapView({
     const makeSection = (section: Section): NodeObj => ({
       id: sectionNodeId(section.id),
       topic: section.name,
-      tags: [`${section.cumulativeCount ?? section.testCaseCount ?? 0}`],
+      tags: [
+        `${section.cumulativeCount ?? section.testCaseCount ?? 0}`,
+        ...(() => {
+          const scopedIds = new Set(getReviewCaseIds({ kind: 'section', id: Number(section.id) }, undefined, sections, visibleTestCases));
+          const count = visibleTestCases.filter((testCase) => scopedIds.has(testCase.id) && testCase.review_required).length;
+          return count ? [`↻ ${count}`] : [];
+        })(),
+      ],
       expanded: section.expanded !== false,
       metadata: {
         kind: 'section',
@@ -485,6 +494,9 @@ export function TestCaseMindmapView({
       nodeData: {
         id: `suite:${suiteId}`,
         topic: suiteName,
+        tags: visibleTestCases.some((testCase) => testCase.review_required)
+          ? [`↻ ${visibleTestCases.filter((testCase) => testCase.review_required).length}`]
+          : [],
         metadata: { kind: 'suite', id: suiteId, title: suiteName, suiteId },
         children: [
           ...sections.map(makeSection),
@@ -493,10 +505,10 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [imageCounts, labels.description, labels.expectedResult, labels.preconditions, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
+  }, [imageCounts, labels.description, labels.expectedResult, labels.preconditions, labels.reviewRequired, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
 
   const dataSignature = useMemo(
-    () => JSON.stringify([suiteId, sections, stepsByCase, imageCounts, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result])]),
+    () => JSON.stringify([suiteId, sections, stepsByCase, imageCounts, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result, review_required }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result, review_required])]),
     [imageCounts, sections, stepsByCase, suiteId, visibleTestCases],
   );
 

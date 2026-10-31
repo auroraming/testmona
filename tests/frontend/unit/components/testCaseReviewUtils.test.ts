@@ -23,9 +23,11 @@ describe('test-case review helpers', () => {
 
   it('expands a selected module to all descendant test cases', () => {
     const sections = [
-      { id: '10', name: 'Parent', testCaseCount: 3 },
-      { id: '11', parentId: '10', name: 'Child', testCaseCount: 2 },
-      { id: '12', parentId: '11', name: 'Grandchild', testCaseCount: 1 },
+      { id: '10', name: 'Parent', testCaseCount: 3, children: [
+        { id: '11', name: 'Child', testCaseCount: 2, children: [
+          { id: '12', name: 'Grandchild', testCaseCount: 1 },
+        ] },
+      ] },
       { id: '20', name: 'Other', testCaseCount: 1 },
     ];
     const cases = [

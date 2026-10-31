@@ -5111,4 +5111,9 @@ export const ar = {
     testCaseReviewReviewerHistoryHint: 'تظل تعليقات المراجعين المُزالين في السجل ولا تدخل في النتيجة الحالية.',
     testCaseReviewRemovedReviewer: 'مراجع مُزال',
     testCaseReviewHistory: 'جولات المراجعة السابقة',
+    testCaseReviewRequired: 'إعادة المراجعة مطلوبة',
+    testCaseReviewPolicy: 'سياسة مراجعة حالات الاختبار',
+    testCaseReviewPolicyDescription: 'التحكم في انتهاء صلاحية مراجعة الحالة بعد تعديلها.',
+    testCaseReviewOnContentChange: 'طلب إعادة المراجعة بعد تغيير المحتوى',
+    testCaseReviewOnContentChangeHint: 'العنوان والشروط والخطوات والنتائج المتوقعة والمرفقات تتطلب إعادة المراجعة؛ الأولوية والمجلد والوسوم وتخطيط الخريطة لا تتطلبها.',
 };

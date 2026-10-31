@@ -24,12 +24,21 @@ export function getReviewCaseIds(
     return selectedCaseId ? [selectedCaseId] : [];
   }
   const sectionIds = new Set<number>([selected.id]);
+  const flatSections: Section[] = [];
+  const parentById = new Map<number, number | null>();
+  const collect = (items: Section[], inheritedParent: number | null = null) => items.forEach((section) => {
+    flatSections.push(section);
+    const sectionId = Number(section.id);
+    parentById.set(sectionId, section.parentId == null ? inheritedParent : Number(section.parentId));
+    if (section.children?.length) collect(section.children, sectionId);
+  });
+  collect(sections);
   let changed = true;
   while (changed) {
     changed = false;
-    sections.forEach((section) => {
+    flatSections.forEach((section) => {
       const sectionId = Number(section.id);
-      const parentId = section.parentId == null ? null : Number(section.parentId);
+      const parentId = parentById.get(sectionId) ?? null;
       if (parentId != null && sectionIds.has(parentId) && !sectionIds.has(sectionId)) {
         sectionIds.add(sectionId);
         changed = true;

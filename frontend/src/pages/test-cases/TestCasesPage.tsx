@@ -4525,6 +4525,7 @@ export function TestCases() {
                 testCases: t('testCases'),
                 downloadXlsxTemplate: t('mindmapDownloadXlsxTemplate'),
                 exportXlsx: t('mindmapExportXlsx'),
+                reviewRequired: t('testCaseReviewRequired'),
               }}
               onCreateSection={createMindmapSection}
               onCreateCase={createMindmapCase}

@@ -12,6 +12,7 @@ from ..database import get_db
 from ..auth import get_current_active_user
 from ..models import TestCase, TestResult, TestRun, User, TestCaseRevision, ResultStatus, canonical_result_status
 from ..services import notification_engine, watch_service
+from ..services.test_case_review_service import CONTENT_FIELDS, mark_review_required
 from .test_management_helpers import *
 
 logger = logging.getLogger(__name__)
@@ -654,6 +655,10 @@ def register_case_routes(app):
                 batch=batch,
             )
             batch.flush(db)
+
+        review_fields = sorted(CONTENT_FIELDS.intersection(changed_fields))
+        if review_fields:
+            mark_review_required(db, db_test_case, f"content:{','.join(review_fields)}")
 
         return db_test_case
 

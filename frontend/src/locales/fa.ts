@@ -5108,4 +5108,9 @@ export const fa = {
     testCaseReviewReviewerHistoryHint: 'نظر بازبین حذف‌شده در تاریخچه می‌ماند اما در نتیجه فعلی محاسبه نمی‌شود.',
     testCaseReviewRemovedReviewer: 'بازبین حذف‌شده',
     testCaseReviewHistory: 'دورهای قبلی بازبینی',
+    testCaseReviewRequired: 'نیازمند بازبینی دوباره',
+    testCaseReviewPolicy: 'سیاست بازبینی موارد تست',
+    testCaseReviewPolicyDescription: 'تعیین کنید بازبینی مورد تست پس از ویرایش چه زمانی منقضی شود.',
+    testCaseReviewOnContentChange: 'پس از تغییر محتوا بازبینی دوباره لازم است',
+    testCaseReviewOnContentChangeHint: 'عنوان، پیش‌شرط، مراحل، نتیجه مورد انتظار و پیوست‌ها بازبینی دوباره را فعال می‌کنند؛ اولویت، پوشه، برچسب و چیدمان نقشه فعال نمی‌کنند.',
 };

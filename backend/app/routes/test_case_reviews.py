@@ -273,6 +273,14 @@ def register_test_case_review_routes(app) -> None:
         assignment.decided_at = datetime.now(timezone.utc)
         _recompute_round(round_)
         _recompute(round_.task)
+        if round_.status == "approved":
+            test_case = db.query(models.TestCase).filter(models.TestCase.id == round_.test_case_id).first()
+            if test_case is not None:
+                _revision, current_snapshot = _snapshot(db, test_case)
+                if current_snapshot == round_.snapshot:
+                    test_case.review_required = False
+                    test_case.review_required_at = None
+                    test_case.review_required_reason = None
         db.commit()
         task = _get_task(db, round_.task_id, current_user)
         notification_engine.emit(

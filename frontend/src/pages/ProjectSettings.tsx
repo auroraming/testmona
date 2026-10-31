@@ -40,6 +40,8 @@ export function ProjectSettings() {
   const [projectRole, setProjectRole] = useState<string | null>(null);
   const [features, setFeatures] = useState<FeatureState>(() => normalizeFeatures(null));
   const [savedSnapshot, setSavedSnapshot] = useState<string>('');
+  const [reviewOnContentChange, setReviewOnContentChange] = useState(false);
+  const [savedReviewOnContentChange, setSavedReviewOnContentChange] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,8 +57,8 @@ export function ProjectSettings() {
   );
 
   const isDirty = useMemo(
-    () => serialize(features) !== savedSnapshot,
-    [features, savedSnapshot],
+    () => serialize(features) !== savedSnapshot || reviewOnContentChange !== savedReviewOnContentChange,
+    [features, reviewOnContentChange, savedReviewOnContentChange, savedSnapshot],
   );
 
   useEffect(() => {
@@ -77,6 +79,8 @@ export function ProjectSettings() {
         if (cancelled) return;
         setProjectName(project.name);
         setOwnerId(project.owner_id ?? null);
+        setReviewOnContentChange(Boolean(project.test_case_review_on_content_change));
+        setSavedReviewOnContentChange(Boolean(project.test_case_review_on_content_change));
         const normalized = normalizeFeatures(featureData.features);
         setFeatures(normalized);
         setSavedSnapshot(serialize(normalized));
@@ -148,22 +152,32 @@ export function ProjectSettings() {
       }
       return restored;
     });
+    setReviewOnContentChange(savedReviewOnContentChange);
   };
 
   const handleSave = async () => {
     if (!numericProjectId || !canManage) return;
     setIsSaving(true);
     try {
-      const updated = await projectsAPI.updateFeatures(numericProjectId, features);
+      const [updated, updatedProject] = await Promise.all([
+        projectsAPI.updateFeatures(numericProjectId, features),
+        projectsAPI.update(numericProjectId, { test_case_review_on_content_change: reviewOnContentChange }),
+      ]);
       const normalized = normalizeFeatures(updated.features);
       setFeatures(normalized);
       setSavedSnapshot(serialize(normalized));
+      setReviewOnContentChange(Boolean(updatedProject.test_case_review_on_content_change));
+      setSavedReviewOnContentChange(Boolean(updatedProject.test_case_review_on_content_change));
 
       // Keep the store (and therefore the sidebar) in sync without dropping the
       // cached counts the list endpoint provides.
       const existing = projects.find((p) => p.id === numericProjectId);
       if (existing) {
-        updateProject({ ...existing, features: normalized });
+        updateProject({
+          ...existing,
+          features: normalized,
+          test_case_review_on_content_change: Boolean(updatedProject.test_case_review_on_content_change),
+        });
       }
       toast({ title: t('success'), description: t('projectSettingsSaved') });
     } catch (err) {
@@ -307,6 +321,18 @@ export function ProjectSettings() {
               })}
             </div>
           )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('testCaseReviewPolicy')}</CardTitle>
+          <CardDescription>{t('testCaseReviewPolicyDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-start justify-between gap-4 rounded-lg border p-4">
+            <div><p className="text-sm font-medium">{t('testCaseReviewOnContentChange')}</p><p className="mt-1 text-xs text-muted-foreground">{t('testCaseReviewOnContentChangeHint')}</p></div>
+            <Switch checked={reviewOnContentChange} onCheckedChange={setReviewOnContentChange} disabled={!canManage || isSaving} aria-label={t('testCaseReviewOnContentChange')} />
+          </div>
         </CardContent>
       </Card>
     </div>

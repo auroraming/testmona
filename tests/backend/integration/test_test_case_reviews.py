@@ -165,3 +165,53 @@ def test_review_validates_scope_mode_and_reviewer_access(client):
     cross_suite = _create(client, suite_id, [other_case_id], [client.member_id], mode="single")
     assert cross_suite.status_code == 400
     assert cross_suite.json()["detail"]["invalid_test_case_ids"] == [other_case_id]
+
+
+def test_project_policy_marks_only_review_sensitive_changes_and_new_approval_clears_it(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_CASE_IMAGE_DIR", str(tmp_path))
+    suite_id, first_id, _second_id, _reviewer_id, _outsider_id = _seed_cases(client)
+    policy = client.put(
+        f"/projects/{client.project_id}",
+        json={"test_case_review_on_content_change": True},
+    )
+    assert policy.status_code == 200, policy.text
+    assert policy.json()["test_case_review_on_content_change"] is True
+
+    created = _create(client, suite_id, [first_id], [1], mode="single")
+    assert created.status_code == 201, created.text
+    task = created.json()
+    first_round = task["rounds"][0]
+    approved = client.post(f"/test-case-review-rounds/{first_round['id']}/decision", json={"decision": "approved"})
+    assert approved.status_code == 200, approved.text
+
+    priority = client.put(f"/test-cases/{first_id}", json={"priority": "low"})
+    assert priority.status_code == 200, priority.text
+    assert priority.json()["review_required"] is False
+    description = client.put(f"/test-cases/{first_id}", json={"description": "Editorial detail"})
+    assert description.status_code == 200, description.text
+    assert description.json()["review_required"] is False
+
+    title = client.put(f"/test-cases/{first_id}", json={"title": "Login succeeds safely"})
+    assert title.status_code == 200, title.text
+    assert title.json()["review_required"] is True
+    assert title.json()["review_required_reason"] == "content:title"
+
+    rereview = client.post(f"/test-case-review-tasks/{task['id']}/rereview", json={"test_case_ids": [first_id]})
+    assert rereview.status_code == 201, rereview.text
+    second_round = max(rereview.json()["rounds"], key=lambda item: item["round_number"])
+    reapproved = client.post(f"/test-case-review-rounds/{second_round['id']}/decision", json={"decision": "approved"})
+    assert reapproved.status_code == 200, reapproved.text
+    with client.SessionLocal() as db:
+        from app import models
+        assert db.query(models.TestCase).filter(models.TestCase.id == first_id).one().review_required is False
+
+    uploaded = client.post(
+        f"/test-cases/{first_id}/images",
+        files={"file": ("evidence.png", b"\x89PNG\r\n\x1a\nreview", "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    with client.SessionLocal() as db:
+        from app import models
+        case = db.query(models.TestCase).filter(models.TestCase.id == first_id).one()
+        assert case.review_required is True
+        assert case.review_required_reason == "content:attachments"

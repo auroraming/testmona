@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .. import models, rbac, schemas
 from ..auth import get_current_active_user
 from ..database import get_db
+from ..services.test_case_review_service import mark_review_required
 
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -174,6 +175,7 @@ def register_test_case_image_routes(app) -> None:
             db.rollback()
             destination.unlink(missing_ok=True)
             raise
+        mark_review_required(db, test_case, "content:attachments")
         return _view(row)
 
     @app.put("/test-cases/{test_case_id}/images/{image_id}")
@@ -213,6 +215,7 @@ def register_test_case_image_routes(app) -> None:
             destination.unlink(missing_ok=True)
             raise
         old_path.unlink(missing_ok=True)
+        mark_review_required(db, test_case, "content:attachments")
         return _view(row)
 
     @app.get("/test-cases/{test_case_id}/images/{image_id}/content")
@@ -254,4 +257,5 @@ def register_test_case_image_routes(app) -> None:
         db.delete(row)
         db.commit()
         path.unlink(missing_ok=True)
+        mark_review_required(db, test_case, "content:attachments")
         return None
