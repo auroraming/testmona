@@ -683,6 +683,8 @@ class TestResult(TestResultBase):
     paused_at: Optional[datetime] = None
     total_paused_time: Optional[float] = 0.0
     manual_time_adjustment: Optional[float] = 0.0
+    test_case_snapshot: Optional[Dict[str, Any]] = None
+    test_case_revision_number: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -703,6 +705,8 @@ class TestResultWithDetails(TestResultBase):
     paused_at: Optional[datetime] = None
     total_paused_time: Optional[float] = 0.0
     manual_time_adjustment: Optional[float] = 0.0
+    test_case_snapshot: Optional[Dict[str, Any]] = None
+    test_case_revision_number: Optional[int] = None
     defect_links: List['TestResultDefectLink'] = []
 
     class Config:

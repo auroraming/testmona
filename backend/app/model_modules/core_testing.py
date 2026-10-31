@@ -394,6 +394,8 @@ class TestResult(Base):
     # "actual_result": str?, "comments": str?}]. The row-level `status` field
     # remains the derived overall outcome.
     iteration_results = Column(JSON, nullable=True)
+    test_case_snapshot = Column(JSON, nullable=True)
+    test_case_revision_number = Column(Integer, nullable=True)
 
     @validates("status")
     def _normalize_status(self, _key, value):

@@ -10,6 +10,49 @@ from .. import models
 CONTENT_FIELDS = {"title", "preconditions", "steps", "expected_result"}
 
 
+def snapshot_test_case(db: Session, test_case: models.TestCase) -> tuple[int, dict]:
+    """Capture the case content used by reviews and historical executions."""
+    revision = db.query(models.TestCaseRevision.revision_number).filter(
+        models.TestCaseRevision.test_case_id == test_case.id,
+    ).order_by(models.TestCaseRevision.revision_number.desc()).limit(1).scalar() or 0
+    steps = db.query(models.TestCaseStep).filter(
+        models.TestCaseStep.test_case_id == test_case.id,
+    ).order_by(models.TestCaseStep.order_index, models.TestCaseStep.step_number).all()
+    images = db.query(models.TestCaseImage).filter(
+        models.TestCaseImage.test_case_id == test_case.id,
+    ).order_by(models.TestCaseImage.id).all()
+    return revision, {
+        "title": test_case.title,
+        "description": test_case.description,
+        "preconditions": test_case.preconditions,
+        "steps": test_case.steps,
+        "expected_result": test_case.expected_result,
+        "priority": test_case.priority,
+        "test_type": test_case.test_type,
+        "structured_steps": [
+            {
+                "step_number": step.step_number,
+                "action": step.action,
+                "expected_result": step.expected_result,
+                "step_type": step.step_type,
+                "data": step.data,
+            }
+            for step in steps
+        ],
+        "images": [
+            {
+                "id": image.id,
+                "test_step_id": image.test_step_id,
+                "filename": image.filename,
+                "mime_type": image.mime_type,
+                "sha256": image.sha256,
+                "alt_text": image.alt_text,
+            }
+            for image in images
+        ],
+    }
+
+
 def mark_review_required(db: Session, test_case: models.TestCase, reason: str) -> bool:
     """Mark a reviewed case stale when its project policy is enabled.
 

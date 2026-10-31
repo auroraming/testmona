@@ -82,7 +82,14 @@ def register_result_routes(app):
         if _is_completed_result_status(test_result.status) and not test_result.executed_by:
             test_result.executed_by = current_user.id
 
-        db_test_result = crud.create_test_result(db=db, test_result=test_result)
+        from ..services.test_case_review_service import snapshot_test_case
+        revision_number, snapshot = snapshot_test_case(db, test_case)
+        db_test_result = crud.create_test_result(
+            db=db,
+            test_result=test_result,
+            test_case_snapshot=snapshot,
+            test_case_revision_number=revision_number,
+        )
         
         # Create audit trail
         try:

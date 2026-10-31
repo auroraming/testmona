@@ -7,13 +7,13 @@ from typing import Literal
 
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from .. import models, rbac, schemas
 from ..auth import get_current_active_user
 from ..database import get_db
 from ..services import notification_engine
+from ..services.test_case_review_service import snapshot_test_case
 
 
 class ReviewTaskCreate(BaseModel):
@@ -60,34 +60,7 @@ def _reviewers(db: Session, reviewer_ids: list[int], project_id: int) -> list[mo
 
 
 def _snapshot(db: Session, test_case: models.TestCase) -> tuple[int, dict]:
-    revision = db.query(func.max(models.TestCaseRevision.revision_number)).filter(
-        models.TestCaseRevision.test_case_id == test_case.id,
-    ).scalar() or 0
-    steps = db.query(models.TestCaseStep).filter(models.TestCaseStep.test_case_id == test_case.id).order_by(
-        models.TestCaseStep.order_index, models.TestCaseStep.step_number,
-    ).all()
-    images = db.query(models.TestCaseImage).filter(models.TestCaseImage.test_case_id == test_case.id).order_by(
-        models.TestCaseImage.id,
-    ).all()
-    return revision, {
-        "title": test_case.title,
-        "description": test_case.description,
-        "preconditions": test_case.preconditions,
-        "steps": test_case.steps,
-        "expected_result": test_case.expected_result,
-        "priority": test_case.priority,
-        "test_type": test_case.test_type,
-        "structured_steps": [
-            {"step_number": step.step_number, "action": step.action, "expected_result": step.expected_result,
-             "step_type": step.step_type, "data": step.data}
-            for step in steps
-        ],
-        "images": [
-            {"id": image.id, "test_step_id": image.test_step_id, "filename": image.filename,
-             "mime_type": image.mime_type, "sha256": image.sha256, "alt_text": image.alt_text}
-            for image in images
-        ],
-    }
+    return snapshot_test_case(db, test_case)
 
 
 def _recompute(task: models.TestCaseReviewTask) -> None:

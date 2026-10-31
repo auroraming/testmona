@@ -801,9 +801,14 @@ def _auto_create_defect_for_failed_result(db: Session, test_result: TestResult, 
         logger.error(f"Failed to auto-create defect for failed test result {test_result.id}: {e}")
 
 
-def create_test_result(db: Session, test_result: TestResultCreate):
+def create_test_result(db: Session, test_result: TestResultCreate, *, test_case_snapshot=None,
+                       test_case_revision_number=None):
     test_result_data = test_result.model_dump()
-    db_test_result = TestResult(**test_result_data)
+    db_test_result = TestResult(
+        **test_result_data,
+        test_case_snapshot=test_case_snapshot,
+        test_case_revision_number=test_case_revision_number,
+    )
     apply_test_result_execution_timing(db_test_result, test_result_data)
     db.add(db_test_result)
     safe_commit(db)
