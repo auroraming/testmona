@@ -267,6 +267,8 @@ export interface TestResult {
   created_at: string;
   updated_at?: string;
   retest_needed?: boolean;
+  test_case_snapshot?: Record<string, unknown> | null;
+  test_case_revision_number?: number | null;
   defect_links?: Array<{ id: number; link_type: string; defect?: { id: number; defect_id?: string; title?: string } }>;
 }
 

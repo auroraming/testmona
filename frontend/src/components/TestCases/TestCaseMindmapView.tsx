@@ -13,7 +13,9 @@ import type { TestCase } from '@/types';
 import type { Section } from '@/types/testCases';
 import { TestCaseImages } from './TestCaseImages';
 import { TestCaseReviewPanel } from './TestCaseReviewPanel';
+import { TestCaseRunPanel } from './TestCaseRunPanel';
 import { getReviewCaseIds } from './testCaseReviewUtils';
+import type { TestResult } from '@/types';
 
 type SelectedNode = {
   kind: 'suite' | 'section' | 'case' | 'field' | 'step';
@@ -217,6 +219,7 @@ export function TestCaseMindmapView({
   const pendingActionRef = useRef<(() => void) | null>(null);
   const structuralIndexRef = useRef(0);
   const [, setStructuralVersion] = useState(0);
+  const [runStatuses, setRunStatuses] = useState<Record<number, TestResult['status']>>({});
 
   useEffect(() => { clipboardRef.current = clipboard; }, [clipboard]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -443,6 +446,7 @@ export function TestCaseMindmapView({
         testCase.priority,
         ...(imageCounts[testCase.id] ? [`🖼 ${imageCounts[testCase.id]}`] : []),
         ...(testCase.review_required ? [`↻ ${labels.reviewRequired}`] : []),
+        ...(runStatuses[testCase.id] ? [runStatuses[testCase.id]] : []),
       ],
       metadata: {
         kind: 'case',
@@ -505,7 +509,7 @@ export function TestCaseMindmapView({
       },
       direction: MindElixir.SIDE,
     };
-  }, [imageCounts, labels.description, labels.expectedResult, labels.preconditions, labels.reviewRequired, labels.steps, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
+  }, [imageCounts, labels.description, labels.expectedResult, labels.preconditions, labels.reviewRequired, labels.steps, runStatuses, sections, stepsByCase, suiteId, suiteName, visibleTestCases]);
 
   const dataSignature = useMemo(
     () => JSON.stringify([suiteId, sections, stepsByCase, imageCounts, visibleTestCases.map(({ id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result, review_required }) => [id, title, section_id, priority, project_seq, description, preconditions, steps, expected_result, review_required])]),
@@ -1056,6 +1060,13 @@ export function TestCaseMindmapView({
               testCaseIds={reviewCaseIds}
               targetLabel={selected.title}
               canWrite={canWrite}
+            />
+            <TestCaseRunPanel
+              projectId={projectId}
+              testCaseIds={reviewCaseIds}
+              selectedCaseId={selectedCaseId}
+              canWrite={canWrite}
+              onResultsChange={setRunStatuses}
             />
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <Button variant="outline" className="w-full" onClick={openRenameDialog}><Edit className="mr-2 h-4 w-4" />{labels.rename}</Button>}
             {canWrite && (selected.kind === 'section' || selected.kind === 'case') && <div className="grid grid-cols-2 gap-2">

@@ -31,6 +31,19 @@ def test_result_case_snapshot_is_server_owned_and_immutable(client):
     assert snapshot["preconditions"] == "Signed in"
     assert snapshot["steps"] == "Open dashboard"
 
+    status_update = client.put(f"/test-results/{created.json()['id']}", json={"status": "pass"})
+    assert status_update.status_code == 200, status_update.text
+    db = client.SessionLocal()
+    try:
+        from app import models
+        audit = db.query(models.AuditTrail).filter(
+            models.AuditTrail.entity_id == created.json()["id"],
+            models.AuditTrail.description.like("Test result status changed:%"),
+        ).one()
+        assert audit.additional_metadata == {"previous_status": "not_started", "status": "pass"}
+    finally:
+        db.close()
+
     updated = client.put(f"/test-cases/{case['id']}", json={"title": "Changed later"})
     assert updated.status_code == 200, updated.text
     results = client.get("/test-results", params={"test_run_id": run["id"]})

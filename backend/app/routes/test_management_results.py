@@ -201,6 +201,7 @@ def register_result_routes(app):
         db_test_result = crud.get_test_result(db, test_result_id=test_result_id)
         if db_test_result is None:
             raise HTTPException(status_code=404, detail="Test result not found")
+        previous_status = db_test_result.status
         
         # Get the test run to check project access
         test_run = crud.get_test_run(db, test_run_id=db_test_result.test_run_id)
@@ -224,6 +225,22 @@ def register_result_routes(app):
 
         # Perform the update
         db_test_result = crud.update_test_result(db, test_result_id=test_result_id, test_result=test_result)
+        if test_result.status is not None and db_test_result.status != previous_status:
+            try:
+                from ..services.audit_service import get_audit_service
+                from ..schemas_audit import AuditTrailCreate
+                from ..models import AuditAction, EntityType
+                get_audit_service(db).create_audit_trail(AuditTrailCreate(
+                    user_id=current_user.id,
+                    action=AuditAction.EXECUTE.value,
+                    entity_type=EntityType.TEST_RESULT.value,
+                    entity_id=db_test_result.id,
+                    project_id=test_run.project_id if test_run else None,
+                    description=f"Test result status changed: {previous_status} -> {db_test_result.status}",
+                    additional_metadata={"previous_status": previous_status, "status": db_test_result.status},
+                ))
+            except Exception as error:
+                logger.warning(f"Failed to audit test result status change: {error}")
         return crud.get_test_result(db, test_result_id=db_test_result.id)
 
     @app.delete("/test-results/{test_result_id}", response_model=schemas.MessageResponse)
